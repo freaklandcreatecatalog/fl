@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Каталог игроков сервера Freakland Create с карточками, тирлистом и локальным хранением."
+    />
+    <title>Freakland Create — каталог игроков</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/png" href="assets/server-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="https://unpkg.com/skinview3d@3/bundles/skinview3d.bundle.js" defer></script>
+    <script src="https://unpkg.com/html2canvas@1/dist/html2canvas.min.js" defer></script>
+    <script src="app.js" type="module"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#" aria-label="Freakland Create">
+          <span class="brand-mark"><img src="assets/server-icon.png" alt="" /></span>
+          <span>
+            <strong>Freakland Create</strong>
+            <small>каталог игроков</small>
+          </span>
+        </a>
+
+        <nav class="tabs" aria-label="Разделы">
+          <button class="tab-button is-active" id="tabCatalog" type="button" data-view="catalog">
+            <i data-lucide="layout-grid" aria-hidden="true"></i>
+            <span>Каталог</span>
+          </button>
+          <button class="tab-button" id="tabTierlist" type="button" data-view="tierlist">
+            <i data-lucide="bar-chart-3" aria-hidden="true"></i>
+            <span>Тирлист</span>
+          </button>
+        </nav>
+
+        <div class="header-actions">
+          <!--search moved--> <label class="search" id="searchWrap" style="display:none">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="searchInput" type="search" placeholder="Поиск по нику" autocomplete="off" />
+          </label>
+
+          <button class="icon-button" id="themeToggle" type="button" aria-label="Переключить тему">
+            <i data-lucide="moon" aria-hidden="true"></i>
+          </button>
+
+          <button class="icon-button admin-only" id="openAdminsButton" type="button" aria-label="Управление админами" hidden>
+            <i data-lucide="shield" aria-hidden="true"></i>
+          </button>
+
+          <button class="icon-button admin-only" id="openLogButton" type="button" aria-label="Лог действий админов" hidden>
+            <i data-lucide="scroll-text" aria-hidden="true"></i>
+          </button>
+
+          <button class="secondary-button" id="loginButton" type="button">
+            <i data-lucide="log-in" aria-hidden="true"></i>
+            <span>Войти</span>
+          </button>
+
+          <button class="secondary-button" id="logoutButton" type="button" hidden>
+            <i data-lucide="log-out" aria-hidden="true"></i>
+            
+          </button>
+
+          <button class="primary-button admin-only" id="openFormButton" type="button" hidden>
+            <i data-lucide="plus" aria-hidden="true"></i>
+            <span>Игрок</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <!-- CATALOG VIEW -->
+      <section class="view" id="viewCatalog">
+        <section class="form-panel" id="formPanel" aria-hidden="true">
+          <form id="playerForm" class="player-form">
+            <div class="form-heading">
+              <div>
+                <h2 id="formTitle">Добавить игрока</h2>
+                <p>Впиши ник в Minecraft — скин подтянется сам.</p>
+              </div>
+              <button class="icon-button quiet" id="closeFormButton" type="button" aria-label="Закрыть форму">
+                <i data-lucide="x" aria-hidden="true"></i>
+              </button>
+            </div>
+
+            <input id="editingId" type="hidden" />
+
+            <div class="field-grid">
+              <label>
+                <span>Ник в Minecraft</span>
+                <input id="nameInput" type="text" placeholder="например, 5opka" required maxlength="32" />
+              </label>
+
+              <label>
+                <span>Telegram</span>
+                <input id="telegramInput" type="text" placeholder="https://t.me/username" />
+              </label>
+
+              <label>
+                <span>Twitch</span>
+                <input id="twitchInput" type="text" placeholder="https://twitch.tv/username" />
+              </label>
+            </div>
+
+            <div class="skin-preview" id="skinPreview" hidden>
+              <img id="skinPreviewImg" alt="Превью скина" />
+              <span id="skinPreviewLabel">Превью скина появится после ввода ника</span>
+            </div>
+
+            <div class="form-actions">
+              <button class="secondary-button" id="resetFormButton" type="button">Очистить</button>
+              <button class="primary-button" type="submit">
+                <i data-lucide="save" aria-hidden="true"></i>
+                <span>Сохранить</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="toolbar">
+          <div><h2>Все игроки</h2><p id="countLabel">0 игроков</p></div><div class="toolbar-actions"><label class="search" id="toolbarSearch"><i data-lucide="search"></i><input id="searchClone" type="search" placeholder="Поиск по нику" autocomplete="off" /></label><label class="sort-select">
+            <span>Сортировка</span>
+            <select id="sortSelect">
+              <option value="alpha-asc">По алфавиту (А-Я)</option>
+              <option value="alpha-desc">По алфавиту (Я-А)</option>
+            </select>
+          </label></div></section>
+
+        <section class="players-grid" id="playersGrid" aria-live="polite"></section>
+
+        <section class="empty-state" id="emptyState" hidden>
+          <i data-lucide="users-round" aria-hidden="true"></i>
+          <h2 id="emptyTitle">Игроков пока нет</h2>
+          <p id="emptyText">Добавь первого участника Freakland Create через форму выше.</p>
+          <button class="primary-button admin-only" id="emptyAddButton" type="button" hidden>
+            <i data-lucide="plus" aria-hidden="true"></i>
+            <span>Добавить игрока</span>
+          </button>
+        </section>
+      </section>
+
+      <!-- TIERLIST VIEW -->
+      <section class="view" id="viewTierlist" hidden>
+        <section class="intro">
+          <div>
+            <p class="kicker">Тирлист</p>
+            <h1>Расставь игроков по тирам.</h1>
+          </div>
+        </section>
+
+        <section class="empty-state" id="tierlistLoginRequired">
+          <i data-lucide="lock" aria-hidden="true"></i>
+          <h2>Нужен вход</h2>
+          <p>Войди в аккаунт — тирлист привязан к нему и виден только тебе.</p>
+          <button class="primary-button" id="tierlistLoginButton" type="button">
+            <i data-lucide="log-in" aria-hidden="true"></i>
+            <span>Войти</span>
+          </button>
+        </section>
+
+        <section class="tierlist-toolbar" id="tierlistToolbar">
+          <label class="sort-select">
+            <span>Тирлист</span>
+            <select id="tierlistSelect"></select>
+          </label>
+
+          <div class="tierlist-actions">
+            <button class="secondary-button" id="newTierlistButton" type="button">
+              <i data-lucide="plus" aria-hidden="true"></i>
+              <span>Новый</span>
+            </button>
+            <button class="secondary-button" id="renameTierlistButton" type="button">
+              <i data-lucide="pencil" aria-hidden="true"></i>
+              <span>Переименовать</span>
+            </button>
+            <button class="secondary-button danger-button" id="deleteTierlistButton" type="button">
+              <i data-lucide="trash-2" aria-hidden="true"></i>
+              <span>Удалить</span>
+            </button>
+            <button class="secondary-button" id="resetTierlistButton" type="button">
+              <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+              <span>Сбросить</span>
+            </button>
+            <button class="secondary-button" id="addTierButton" type="button">
+              <i data-lucide="rows-3" aria-hidden="true"></i>
+              <span>Добавить тир</span>
+            </button>
+            <button class="primary-button" id="saveTierlistButton" type="button">
+              <i data-lucide="save" aria-hidden="true"></i>
+              <span>Сохранить</span>
+            </button>
+            <button class="secondary-button" id="exportTierlistButton" type="button">
+              <i data-lucide="image-down" aria-hidden="true"></i>
+              <span>Экспорт PNG</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="tier-export-area" id="tierExportArea">
+          <h3 class="tier-export-title" id="tierExportTitle"></h3>
+          <section class="tier-rows" id="tierRows"></section>
+        </section>
+
+        <section class="tier-pool-wrap" id="tierPoolWrap">
+          <h3>Все игроки</h3>
+          <div class="tier-pool" id="tierPool" data-tier="pool"></div>
+        </section>
+      </section>
+    </main>
+
+    <!-- LOGIN MODAL -->
+    <div class="modal-backdrop" id="loginModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+        <div class="modal-head">
+          <h2 id="loginModalTitle">Вход для админов</h2>
+          <button class="icon-button quiet" id="closeLoginModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <form id="loginForm" class="modal-form">
+          <label>
+            <span>Логин</span>
+            <input id="loginNameInput" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="loginPasswordInput" type="password" autocomplete="current-password" required />
+          </label>
+          <p class="modal-error" id="loginError" hidden>Неверный логин или пароль</p>
+          <button class="primary-button full-width" type="submit">
+            <i data-lucide="log-in" aria-hidden="true"></i>
+            <span>Войти</span>
+          </button>
+          <button class="link-button" id="showRegisterButton" type="button">Нет аккаунта? Зарегистрироваться</button>
+        </form>
+
+        <form id="registerForm" class="modal-form" hidden>
+          <label>
+            <span>Логин</span>
+            <input id="registerNameInput" type="text" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="registerPasswordInput" type="password" autocomplete="new-password" required />
+          </label>
+          <label>
+            <span>Повторите пароль</span>
+            <input id="registerPasswordConfirmInput" type="password" autocomplete="new-password" required />
+          </label>
+          <p class="modal-error" id="registerError" hidden>Такой логин уже занят</p>
+          <p class="modal-error" id="registerMismatchError" hidden>Пароли не совпадают</p>
+          <button class="primary-button full-width" type="submit">
+            <i data-lucide="user-plus" aria-hidden="true"></i>
+            <span>Зарегистрироваться</span>
+          </button>
+          <button class="link-button" id="showLoginButton" type="button">Уже есть аккаунт? Войти</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- ADMINS MODAL -->
+    <div class="modal-backdrop" id="adminsModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adminsModalTitle">
+        <div class="modal-head">
+          <h2 id="adminsModalTitle">Управление админами</h2>
+          <button class="icon-button quiet" id="closeAdminsModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <ul class="admins-list" id="adminsList"></ul>
+
+        <form id="addAdminForm" class="modal-form">
+          <label>
+            <span>Логин нового админа</span>
+            <input id="newAdminName" type="text" required autocomplete="off" />
+          </label>
+          <label>
+            <span>Пароль</span>
+            <input id="newAdminPassword" type="password" required autocomplete="new-password" />
+          </label>
+          <p class="modal-error" id="addAdminError" hidden>Такой логин уже занят</p>
+          <button class="primary-button full-width" type="submit">
+            <i data-lucide="user-plus" aria-hidden="true"></i>
+            <span>Добавить админа</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- ADMIN ACTION LOG MODAL -->
+    <div class="modal-backdrop" id="logModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+        <div class="modal-head">
+          <h2 id="logModalTitle">Лог действий админов</h2>
+          <button class="icon-button quiet" id="closeLogModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <ul class="log-list" id="logList"></ul>
+
+        <div class="modal-actions">
+          <button class="secondary-button danger-button full-width" id="clearLogButton" type="button">
+            <i data-lucide="trash-2" aria-hidden="true"></i>
+            <span>Очистить лог</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+<!-- TIERLIST NAME PROMPT MODAL -->
+    <div class="modal-backdrop" id="nameModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nameModalTitle">
+        <div class="modal-head">
+          <h2 id="nameModalTitle">Название тирлиста</h2>
+          <button class="icon-button quiet" id="closeNameModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <form id="nameForm" class="modal-form">
+          <label>
+            <span>Название</span>
+            <input id="nameModalInput" type="text" maxlength="40" />
+          </label>
+          <button class="primary-button full-width" type="submit">
+            <i data-lucide="check" aria-hidden="true"></i>
+            <span>Готово</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+  </body>
+</html>

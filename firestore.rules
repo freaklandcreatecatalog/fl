@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userDoc().data.isAdmin == true;
+    }
+
+    function isMainAdmin() {
+      return isSignedIn() && userDoc().data.isMain == true;
+    }
+
+    // Общий каталог игроков — читают все, редактируют только админы
+    match /catalog/players {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Профили пользователей: ник, флаги isAdmin/isMain
+    match /users/{uid} {
+      allow read: if true;
+
+      // Регистрация: пользователь создаёт только свой документ.
+      // isMain/isAdmin можно выставить в true только если ник совпадает
+      // с MAIN_ADMIN_NICKNAME из app.js ("freakland") — это дублирует
+      // проверку на клиенте, но не позволяет подделать поля через прямой запрос.
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.isMain == (request.resource.data.nicknameLower == 'freakland')
+        && request.resource.data.isAdmin == request.resource.data.isMain;
+
+      // Выдавать/забирать права админа может только главный админ,
+      // и только поле isAdmin — остальное трогать нельзя.
+      allow update: if isMainAdmin()
+        && request.auth.uid != uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isAdmin']);
+
+      allow delete: if false;
+    }
+
+    // Личные тирлисты — видит и правит только владелец
+    match /tierlists/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Лог действий админов — читает и чистит только главный админ,
+    // писать может любой админ (через logAction в app.js)
+    match /logs/{logId} {
+      allow read: if isMainAdmin();
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if isMainAdmin();
+    }
+  }
+}
