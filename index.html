@@ -41,6 +41,10 @@
             <i data-lucide="bar-chart-3" aria-hidden="true"></i>
             <span>Тирлист</span>
           </button>
+          <button class="tab-button" id="tabPolmap" type="button" data-view="polmap">
+            <i data-lucide="map" aria-hidden="true"></i>
+            <span>Полит. карта</span>
+          </button>
         </nav>
 
         <div class="header-actions">
@@ -111,6 +115,11 @@
                 <span>Twitch</span>
                 <input id="twitchInput" type="text" placeholder="https://twitch.tv/username" />
               </label>
+
+              <label>
+                <span>Город</span>
+                <select id="cityInput"></select>
+              </label>
             </div>
 
             <div class="skin-preview" id="skinPreview" hidden>
@@ -152,6 +161,9 @@
 
       <!-- TIERLIST VIEW -->
       <section class="view" id="viewTierlist" hidden>
+        <div class="tier-photo-preview" id="tierPhotoPreview" hidden>
+          <img id="tierPhotoPreviewImg" alt="" />
+        </div>
         <section class="intro">
           <div>
             <p class="kicker">Тирлист</p>
@@ -216,6 +228,134 @@
           <h3>Все игроки</h3>
           <div class="tier-pool" id="tierPool" data-tier="pool"></div>
         </section>
+      </section>
+
+      <!-- POLITICAL MAP VIEW -->
+      <section class="view view-polmap" id="viewPolmap" hidden>
+        <div class="polmap-shell">
+          <aside class="polmap-toolbar" id="polmapToolbar">
+            <div class="polmap-toolbar-head">
+              <p class="kicker">Полит. карта</p>
+              <button class="polmap-draw-toggle" id="polmapDrawModeToggle" type="button" title="Режим рисования">
+                <i data-lucide="pen-tool" aria-hidden="true"></i>
+                <span>Рисование</span>
+              </button>
+            </div>
+
+            <div class="polmap-board-field">
+              <label class="polmap-board-select-wrap">
+                <span>Карта</span>
+                <select id="polmapBoardSelect"></select>
+              </label>
+              <button class="icon-button quiet polmap-board-btn" id="polmapNewBoardButton" type="button" title="Новая карта">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+              <button class="icon-button quiet polmap-board-btn danger-button" id="polmapDeleteBoardButton" type="button" title="Удалить карту">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
+            </div>
+
+            <div class="polmap-tool-grid" id="polmapToolGrid">
+              <button type="button" class="polmap-tool" data-tool="hand" title="Рука (H)"><i data-lucide="hand"></i></button>
+              <button type="button" class="polmap-tool" data-tool="brush" title="Кисть (B)"><i data-lucide="pencil"></i></button>
+              <button type="button" class="polmap-tool" data-tool="eraser" title="Ластик (E)"><i data-lucide="eraser"></i></button>
+              <button type="button" class="polmap-tool" data-tool="rect" title="Прямоугольник (R)"><i data-lucide="square"></i></button>
+              <button type="button" class="polmap-tool" data-tool="ellipse" title="Круг (O)"><i data-lucide="circle"></i></button>
+              <button type="button" class="polmap-tool" data-tool="rounded" title="Скруглённый (U)"><i data-lucide="box-select"></i></button>
+              <button type="button" class="polmap-tool" data-tool="diamond" title="Ромб (D)"><i data-lucide="diamond"></i></button>
+              <button type="button" class="polmap-tool" data-tool="arrow" title="Стрелка (A)"><i data-lucide="move-right"></i></button>
+              <button type="button" class="polmap-tool" data-tool="drawArrow" title="Стрелка-кисть (Shift+A)"><i data-lucide="navigation"></i></button>
+              <button type="button" class="polmap-tool" data-tool="pin" title="Точка (P)"><i data-lucide="map-pin"></i></button>
+            </div>
+
+            <div class="polmap-tool-options">
+              <label class="polmap-color-field">
+                <span>Цвет</span>
+                <input id="polmapColorInput" type="color" value="#e8590c" />
+              </label>
+              <label class="polmap-stroke-field">
+                <span>Толщина <strong id="polmapStrokeValue">3</strong></span>
+                <input id="polmapStrokeInput" type="range" min="1" max="16" value="3" />
+              </label>
+            </div>
+
+            <div class="polmap-tool-actions">
+              <button class="secondary-button" id="polmapUndoButton" type="button">
+                <i data-lucide="undo-2" aria-hidden="true"></i>
+                <span>Отмена</span>
+              </button>
+              <button class="secondary-button danger-button" id="polmapClearButton" type="button">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+                <span>Очистить</span>
+              </button>
+            </div>
+
+            <button class="secondary-button polmap-edit-cities-toggle" id="polmapEditCitiesToggle" type="button">
+              <i data-lucide="map-pinned" aria-hidden="true"></i>
+              <span>Редактировать города</span>
+            </button>
+
+            <p class="polmap-hotkeys">
+              <span>H</span> рука · <span>B</span> кисть · <span>E</span> ластик · <span>R/O/U/D</span> фигуры · <span>A</span> стрелка · <span>P</span> точка · колёсико — зум
+            </p>
+          </aside>
+
+          <div class="polmap-viewport" id="polmapViewport">
+            <div class="polmap-stage" id="polmapStage">
+              <img class="polmap-image" id="polmapImage" src="assets/political-map.jpg" alt="Политическая карта Freakland Create" draggable="false" />
+              <svg class="polmap-cities-layer" id="polmapCitiesLayer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+              <svg class="polmap-markers-layer" id="polmapMarkersLayer" preserveAspectRatio="none"></svg>
+              <canvas class="polmap-draw-canvas" id="polmapCanvas"></canvas>
+            </div>
+
+            <div class="polmap-city-popup" id="polmapCityPopup" hidden>
+              <div class="polmap-city-popup-head">
+                <h3 class="polmap-city-popup-title">Город</h3>
+                <button class="icon-button quiet" type="button" id="polmapCityPopupClose" aria-label="Закрыть">
+                  <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+              </div>
+              <ul class="polmap-city-popup-list"></ul>
+            </div>
+
+            <div class="polmap-marker-popup" id="polmapMarkerPopup" hidden>
+              <div class="polmap-city-popup-head">
+                <h3 class="polmap-marker-popup-title">Точка</h3>
+                <button class="icon-button quiet" type="button" id="polmapMarkerPopupClose" aria-label="Закрыть">
+                  <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div class="polmap-marker-popup-actions"></div>
+            </div>
+
+            <div class="polmap-city-edit-panel" id="polmapCityEditPanel" hidden>
+              <div class="polmap-city-popup-head">
+                <h3>Город</h3>
+                <button class="icon-button quiet" type="button" data-action="close" aria-label="Закрыть">
+                  <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+              </div>
+              <label class="polmap-edit-field">
+                <span>Название</span>
+                <input type="text" data-field="name" maxlength="40" />
+              </label>
+              <label class="polmap-edit-field">
+                <span>Цвет</span>
+                <input type="color" data-field="color" />
+              </label>
+              <p class="polmap-edit-hint">Перетаскивайте точки контура · двойной клик по краю — добавить точку · двойной клик по точке — удалить</p>
+              <div class="polmap-tool-actions">
+                <button class="secondary-button" type="button" data-action="reset">Сбросить</button>
+                <button class="primary-button" type="button" data-action="save">Сохранить</button>
+              </div>
+            </div>
+
+            <div class="polmap-zoom-hint">
+              <i data-lucide="mouse" aria-hidden="true"></i>
+              <span>Колёсико — приближение · перетаскивание — перемещение</span>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
 

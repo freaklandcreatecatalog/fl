@@ -389,7 +389,7 @@ h3 {
 }
 
 .form-panel.is-open {
-  max-height: 640px;
+  max-height: 720px;
   opacity: 1;
   transform: translateY(0);
   margin-bottom: 30px;
@@ -419,8 +419,24 @@ h3 {
 
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
+}
+
+.field-grid select {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-weight: 500;
+  outline: none;
+  transition: border-color var(--speed) ease, box-shadow var(--speed) ease;
+}
+
+.field-grid select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
 }
 
 .field-grid label,
@@ -1136,6 +1152,35 @@ h3 {
   transform: scale(1.05);
 }
 
+.tier-photo-preview {
+  position: fixed;
+  z-index: 500;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 240px;
+  max-height: 240px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  transition: opacity var(--speed) ease;
+}
+
+.tier-photo-preview img {
+  display: block;
+  max-width: 224px;
+  max-height: 224px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
 .tier-remove-hint {
   color: var(--muted);
   font-size: 12px;
@@ -1146,6 +1191,853 @@ h3 {
 
 .admin-only[hidden] {
   display: none !important;
+}
+
+.player-card.is-highlighted {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.28), var(--shadow-lift);
+  animation: cardPulse 1.2s ease-in-out 2;
+}
+
+@keyframes cardPulse {
+  0%,
+  100% {
+    transform: translateY(-4px);
+  }
+  50% {
+    transform: translateY(-4px) scale(1.01);
+  }
+}
+
+.city-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  max-width: 130px;
+  transition: transform var(--speed) ease, background var(--speed) ease, border-color var(--speed) ease;
+}
+
+.city-badge svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-strong);
+  flex: none;
+}
+
+.city-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.city-badge:hover {
+  transform: translateY(-2px);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+/* ---------- political map ---------- */
+
+body.is-polmap-view .shell {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
+
+.view-polmap {
+  min-height: calc(100dvh - 76px);
+}
+
+.polmap-shell {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: calc(100dvh - 76px);
+  background: var(--bg);
+}
+
+.polmap-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 16px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(16px);
+  z-index: 4;
+}
+
+.polmap-toolbar-head .kicker {
+  margin-bottom: 10px;
+}
+
+.polmap-draw-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-weight: 700;
+  font-size: 13px;
+  transition: transform var(--speed) ease, background var(--speed) ease, box-shadow var(--speed) ease;
+}
+
+.polmap-draw-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.polmap-draw-toggle.is-active {
+  background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+  color: #2a1200;
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(var(--accent-rgb), 0.34);
+}
+
+.polmap-draw-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.polmap-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.polmap-tool {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  transition: transform 160ms ease, background var(--speed) ease, color var(--speed) ease, box-shadow var(--speed) ease;
+}
+
+.polmap-tool svg {
+  width: 18px;
+  height: 18px;
+}
+
+.polmap-tool:hover:not(:disabled) {
+  transform: translateY(-2px);
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.polmap-tool.is-active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
+}
+
+.polmap-tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.polmap-tool-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+
+.polmap-color-field,
+.polmap-stroke-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.polmap-color-field input[type="color"] {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.polmap-stroke-field input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.polmap-tool-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.polmap-tool-actions .secondary-button {
+  justify-content: center;
+}
+
+.polmap-hotkeys {
+  margin: auto 0 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.polmap-hotkeys span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.polmap-toolbar .is-hidden {
+  display: none !important;
+}
+
+/* ---- board selector ---- */
+
+.polmap-board-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.polmap-board-select-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.polmap-board-select-wrap select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.polmap-board-btn {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+}
+
+/* ---- admin city editor toggle ---- */
+
+.polmap-edit-cities-toggle {
+  justify-content: center;
+}
+
+.polmap-edit-cities-toggle.is-active {
+  background: linear-gradient(145deg, var(--accent), var(--accent-strong));
+  color: #2a1200;
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(var(--accent-rgb), 0.34);
+}
+
+.polmap-viewport.is-edit-cities-mode .polmap-city-hit {
+  cursor: crosshair;
+}
+
+/* ---- vertex handles (city outline editing) ---- */
+
+.polmap-vertex-handle {
+  fill: #fff;
+  stroke: var(--city-color, var(--accent));
+  stroke-width: 0.45;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+  pointer-events: all;
+  transition: r 140ms ease, fill 140ms ease;
+}
+
+.polmap-vertex-handle:hover {
+  r: 1.5;
+  fill: var(--city-color, var(--accent));
+}
+
+.polmap-vertex-handle:active {
+  cursor: grabbing;
+}
+
+/* ---- floating city edit panel ---- */
+
+.polmap-city-edit-panel {
+  position: absolute;
+  z-index: 9;
+  width: min(260px, calc(100% - 24px));
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lift);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+  transition: opacity 180ms ease, transform 260ms cubic-bezier(0.24, 1.1, 0.32, 1);
+}
+
+.polmap-city-edit-panel.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.polmap-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.polmap-edit-field input[type="text"] {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.polmap-edit-field input[type="color"] {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.polmap-edit-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.polmap-city-edit-panel .polmap-tool-actions {
+  flex-direction: row;
+}
+
+.polmap-city-edit-panel .primary-button,
+.polmap-city-edit-panel .secondary-button {
+  flex: 1;
+  justify-content: center;
+}
+
+/* ---- markers (admin pins) ---- */
+
+.polmap-markers-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.polmap-marker {
+  --marker-color: #e8590c;
+  cursor: pointer;
+}
+
+.polmap-marker-halo {
+  fill: color-mix(in srgb, var(--marker-color) 25%, transparent);
+  pointer-events: all;
+  transition: r 200ms ease, opacity 200ms ease;
+}
+
+.polmap-marker-dot {
+  fill: var(--marker-color);
+  stroke: #fff;
+  stroke-width: 3;
+  pointer-events: all;
+  transition: transform 200ms cubic-bezier(0.24, 1.4, 0.4, 1);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.polmap-marker-label {
+  fill: var(--text);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 5;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+
+.polmap-marker:hover .polmap-marker-dot {
+  transform: scale(1.35);
+}
+
+.polmap-marker:hover .polmap-marker-label {
+  opacity: 1;
+}
+
+.polmap-marker:hover .polmap-marker-halo {
+  r: 22;
+}
+
+/* ---- marker popup ---- */
+
+.polmap-marker-popup {
+  position: absolute;
+  z-index: 8;
+  width: min(240px, calc(100% - 24px));
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lift);
+  padding: 12px;
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+  transition: opacity 180ms ease, transform 260ms cubic-bezier(0.24, 1.1, 0.32, 1);
+}
+
+.polmap-marker-popup.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.polmap-marker-popup-title {
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.polmap-marker-popup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.polmap-marker-popup-actions .secondary-button {
+  justify-content: center;
+}
+
+.polmap-viewport {
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(var(--accent-rgb), 0.06), transparent 40%),
+    repeating-linear-gradient(0deg, transparent, transparent 23px, color-mix(in srgb, var(--line) 35%, transparent) 24px),
+    repeating-linear-gradient(90deg, transparent, transparent 23px, color-mix(in srgb, var(--line) 35%, transparent) 24px),
+    var(--surface-soft);
+  box-shadow: inset 0 0 90px color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.polmap-viewport.is-draw-mode {
+  cursor: crosshair;
+}
+
+.polmap-viewport:active {
+  cursor: grabbing;
+}
+
+.polmap-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.polmap-stage.is-flying {
+  transition: transform 650ms cubic-bezier(0.22, 0.9, 0.15, 1);
+}
+
+.polmap-stage.is-entering {
+  animation: polmapStageIn 700ms cubic-bezier(0.16, 0.9, 0.22, 1);
+}
+
+@keyframes polmapStageIn {
+  0% {
+    opacity: 0;
+    filter: saturate(0.6) brightness(1.15);
+  }
+  100% {
+    opacity: 1;
+    filter: saturate(1) brightness(1);
+  }
+}
+
+.polmap-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.polmap-cities-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.polmap-cities-layer.is-hidden {
+  display: none;
+}
+
+.polmap-city-group {
+  --city-color: var(--accent);
+}
+
+.polmap-city-hit {
+  fill: rgba(var(--accent-rgb), 0);
+  stroke: transparent;
+  stroke-width: 0.35;
+  stroke-linejoin: round;
+  pointer-events: all;
+  cursor: pointer;
+  transition: fill 260ms ease, stroke 260ms ease, stroke-width 260ms ease, filter 260ms ease;
+}
+
+.polmap-city-hit.is-debug {
+  fill: rgba(var(--accent-rgb), 0.12);
+  stroke: rgba(var(--accent-rgb), 0.55);
+}
+
+.polmap-viewport:not(.is-draw-mode) .polmap-city-group:hover .polmap-city-hit,
+.polmap-city-hit.is-focused {
+  fill: color-mix(in srgb, var(--city-color) 22%, transparent);
+  stroke: var(--city-color);
+  stroke-width: 0.55;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--city-color) 65%, transparent));
+}
+
+.polmap-city-hit.is-focused {
+  animation: polmapFocusPulse 1.2s ease-out 2;
+}
+
+@keyframes polmapFocusPulse {
+  0% {
+    stroke-width: 0.35;
+    filter: drop-shadow(0 0 0 color-mix(in srgb, var(--city-color) 0%, transparent));
+  }
+  40% {
+    stroke-width: 0.9;
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--city-color) 85%, transparent));
+  }
+  100% {
+    stroke-width: 0.55;
+    filter: drop-shadow(0 0 6px color-mix(in srgb, var(--city-color) 60%, transparent));
+  }
+}
+
+.polmap-city-tag {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.polmap-viewport:not(.is-draw-mode) .polmap-city-group:hover .polmap-city-tag {
+  opacity: 1;
+}
+
+.polmap-city-tag-inner {
+  transform: translateY(-3.4px) scale(0.9);
+  transform-origin: center;
+  transform-box: fill-box;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.polmap-viewport:not(.is-draw-mode) .polmap-city-group:hover .polmap-city-tag-inner {
+  transform: translateY(-4.6px) scale(1);
+}
+
+.polmap-city-tag-bg {
+  fill: color-mix(in srgb, var(--city-color) 88%, black 6%);
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 0.08;
+}
+
+.polmap-city-tag-text {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.7px;
+  fill: #fff;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.03;
+}
+
+.polmap-city-pulse {
+  fill: var(--city-color);
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.polmap-city-group.has-players .polmap-city-pulse {
+  opacity: 0.9;
+  animation: polmapPulse 2.2s ease-out infinite;
+}
+
+@keyframes polmapPulse {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  70% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+.polmap-draw-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.polmap-city-popup {
+  position: absolute;
+  z-index: 8;
+  width: min(280px, calc(100% - 24px));
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lift);
+  padding: 12px;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(8px) scale(0.96);
+  transition: opacity 180ms ease, transform 260ms cubic-bezier(0.24, 1.1, 0.32, 1);
+}
+
+.polmap-city-popup.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.polmap-city-popup::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 30%, color-mix(in srgb, var(--accent) 30%, transparent) 48%, transparent 66%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+
+.polmap-city-popup.is-open::before {
+  animation: polmapShimmer 900ms ease 60ms 1;
+}
+
+@keyframes polmapShimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+.polmap-city-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.polmap-city-popup-title {
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.polmap-city-popup-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--city-color, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--city-color, var(--accent)) 25%, transparent);
+  flex: none;
+}
+
+.polmap-city-popup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.polmap-city-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  transition: background var(--speed) ease, transform var(--speed) ease;
+  opacity: 0;
+  animation: polmapRowIn 320ms ease forwards;
+}
+
+.polmap-city-popup-list li:nth-child(1) .polmap-city-player { animation-delay: 40ms; }
+.polmap-city-popup-list li:nth-child(2) .polmap-city-player { animation-delay: 80ms; }
+.polmap-city-popup-list li:nth-child(3) .polmap-city-player { animation-delay: 120ms; }
+.polmap-city-popup-list li:nth-child(4) .polmap-city-player { animation-delay: 160ms; }
+.polmap-city-popup-list li:nth-child(n+5) .polmap-city-player { animation-delay: 190ms; }
+
+@keyframes polmapRowIn {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.polmap-city-player img {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  image-rendering: pixelated;
+  background: var(--surface-soft);
+}
+
+.polmap-city-player:hover {
+  background: var(--accent-soft);
+  transform: translateX(3px);
+}
+
+.polmap-city-popup-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 4px;
+}
+
+.polmap-zoom-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  animation: hintFade 4s ease 1s forwards;
+}
+
+.polmap-zoom-hint svg {
+  width: 14px;
+  height: 14px;
+}
+
+@keyframes hintFade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .polmap-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .polmap-toolbar {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .polmap-tool-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+
+  .polmap-hotkeys {
+    display: none;
+  }
 }
 
 @media (max-width: 860px) {

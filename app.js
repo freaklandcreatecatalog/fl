@@ -22,6 +22,18 @@ import {
   orderBy,
   limit,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  initPoliticalMap,
+  setPoliticalMapCanEdit,
+  setPoliticalMapBoardData,
+  setPoliticalMapBoards,
+  setPoliticalMapCityOverrides,
+  focusPoliticalCity,
+  onPoliticalMapShow,
+  updatePoliticalMapPopulation,
+  MAIN_BOARD_ID,
+} from "./political-map.js";
+import { applyCityOverrides } from "./cities.js";
 
 /* ================= Firebase ================= */
 
@@ -70,9 +82,17 @@ const state = {
   activeTierlist: "",
   viewers: new Map(),
   pendingPromptResolve: null,
+  highlightPlayerId: null,
+  activeView: "catalog",
+  polmapMainData: { elements: [], markers: [] },
+  polmapBoards: [],
+  polmapActiveBoardId: "main",
+  polmapCityOverrides: {},
+  tierPhotoPreviewEnabled: true,
 };
 
 let unsubTierlists = null;
+let unsubActiveBoard = null;
 
 /* ================= DOM refs ================= */
 const els = {
@@ -94,6 +114,7 @@ const els = {
   name: document.querySelector("#nameInput"),
   telegram: document.querySelector("#telegramInput"),
   twitch: document.querySelector("#twitchInput"),
+  city: document.querySelector("#cityInput"),
   skinPreview: document.querySelector("#skinPreview"),
   skinPreviewImg: document.querySelector("#skinPreviewImg"),
   skinPreviewLabel: document.querySelector("#skinPreviewLabel"),
@@ -145,8 +166,10 @@ const els = {
 
   tabCatalog: document.querySelector("#tabCatalog"),
   tabTierlist: document.querySelector("#tabTierlist"),
+  tabPolmap: document.querySelector("#tabPolmap"),
   viewCatalog: document.querySelector("#viewCatalog"),
   viewTierlist: document.querySelector("#viewTierlist"),
+  viewPolmap: document.querySelector("#viewPolmap"),
 
   tierlistLoginRequired: document.querySelector("#tierlistLoginRequired"),
   tierlistLoginButton: document.querySelector("#tierlistLoginButton"),
@@ -164,6 +187,32 @@ const els = {
   tierPoolWrap: document.querySelector("#tierPoolWrap"),
   tierRows: document.querySelector("#tierRows"),
   tierPool: document.querySelector("#tierPool"),
+  tierPhotoPreview: document.querySelector("#tierPhotoPreview"),
+  tierPhotoPreviewImg: document.querySelector("#tierPhotoPreviewImg"),
+
+  polmapToolbar: document.querySelector("#polmapToolbar"),
+  polmapDrawModeToggle: document.querySelector("#polmapDrawModeToggle"),
+  polmapToolGrid: document.querySelector("#polmapToolGrid"),
+  polmapColorInput: document.querySelector("#polmapColorInput"),
+  polmapStrokeInput: document.querySelector("#polmapStrokeInput"),
+  polmapStrokeValue: document.querySelector("#polmapStrokeValue"),
+  polmapUndoButton: document.querySelector("#polmapUndoButton"),
+  polmapClearButton: document.querySelector("#polmapClearButton"),
+  polmapViewport: document.querySelector("#polmapViewport"),
+  polmapStage: document.querySelector("#polmapStage"),
+  polmapImage: document.querySelector("#polmapImage"),
+  polmapCitiesLayer: document.querySelector("#polmapCitiesLayer"),
+  polmapCanvas: document.querySelector("#polmapCanvas"),
+  polmapCityPopup: document.querySelector("#polmapCityPopup"),
+  polmapCityPopupClose: document.querySelector("#polmapCityPopupClose"),
+  polmapBoardSelect: document.querySelector("#polmapBoardSelect"),
+  polmapNewBoardButton: document.querySelector("#polmapNewBoardButton"),
+  polmapDeleteBoardButton: document.querySelector("#polmapDeleteBoardButton"),
+  polmapEditCitiesToggle: document.querySelector("#polmapEditCitiesToggle"),
+  polmapCityEditPanel: document.querySelector("#polmapCityEditPanel"),
+  polmapMarkersLayer: document.querySelector("#polmapMarkersLayer"),
+  polmapMarkerPopup: document.querySelector("#polmapMarkerPopup"),
+  polmapMarkerPopupClose: document.querySelector("#polmapMarkerPopupClose"),
 };
 
 const observer = new IntersectionObserver(
@@ -182,7 +231,10 @@ init();
 
 async function init() {
   applyInitialTheme();
+  populateCitySelect();
   bindEvents();
+  setupTierPhotoPreview();
+  initPoliticalMapModule();
   updateAuthUI();
   renderTierlist();
   refreshIcons();
@@ -192,6 +244,39 @@ async function init() {
     state.players = snap.exists() && Array.isArray(snap.data().list) ? snap.data().list : [];
     renderCatalog();
     renderTierlist();
+    updatePoliticalMapPopulation();
+  });
+
+  // Основная карта (elements + markers) — публичное чтение
+  onSnapshot(doc(db, "catalog", "politicalMap"), (snap) => {
+    const data = snap.exists() ? snap.data() : {};
+    state.polmapMainData = {
+      elements: Array.isArray(data.elements) ? decodePolmapElements(data.elements) : [],
+      markers: Array.isArray(data.markers) ? data.markers : [],
+    };
+    if (state.polmapActiveBoardId === MAIN_BOARD_ID) {
+      setPoliticalMapBoardData(MAIN_BOARD_ID, { ...state.polmapMainData, isMain: true, name: "Политическая карта" });
+    }
+  });
+
+  // Дополнительные карты-планы, которые создают админы
+  onSnapshot(collection(db, "politicalMapBoards"), (snap) => {
+    state.polmapBoards = snap.docs.map((d) => ({ id: d.id, name: d.data().name || "Без названия" }));
+    setPoliticalMapBoards(state.polmapBoards);
+    if (state.polmapActiveBoardId !== MAIN_BOARD_ID && !snap.docs.some((d) => d.id === state.polmapActiveBoardId)) {
+      switchPoliticalMapBoard(MAIN_BOARD_ID);
+    }
+  });
+
+  // Правки городов (имя/цвет/контур), которые вносят админы
+  onSnapshot(doc(db, "catalog", "politicalMapCityMeta"), (snap) => {
+    state.polmapCityOverrides = snap.exists() && snap.data().overrides ? snap.data().overrides : {};
+    setPoliticalMapCityOverrides(state.polmapCityOverrides);
+    renderCatalog();
+    if (els.formPanel?.classList.contains("is-open")) {
+      const currentCity = els.city.value;
+      els.city.innerHTML = getEffectiveCityOptionsHtml(currentCity);
+    }
   });
 
   onAuthStateChanged(auth, async (fbUser) => {
@@ -221,6 +306,200 @@ async function init() {
     renderCatalog();
     renderTierlist();
   });
+}
+
+function populateCitySelect() {
+  if (!els.city) return;
+  els.city.innerHTML = getEffectiveCityOptionsHtml();
+}
+
+// Города с учётом админских правок (имя/цвет/контур), внесённых на полит. карте —
+// чтобы карточки игроков и селект города всегда совпадали с тем, что видно на карте.
+function effectiveCities() {
+  return applyCityOverrides(state.polmapCityOverrides);
+}
+
+function getEffectiveCityById(id) {
+  if (!id) return null;
+  return effectiveCities().find((city) => city.id === id) || null;
+}
+
+function getEffectiveCityOptionsHtml(selectedId = "") {
+  const options = ['<option value="">— город не указан —</option>'];
+  effectiveCities().forEach((city) => {
+    const selected = city.id === selectedId ? " selected" : "";
+    options.push(`<option value="${city.id}"${selected}>${escapeHtml(city.name)}</option>`);
+  });
+  return options.join("");
+}
+
+function initPoliticalMapModule() {
+  initPoliticalMap({
+    els: {
+      view: els.viewPolmap,
+      toolbar: els.polmapToolbar,
+      drawModeToggle: els.polmapDrawModeToggle,
+      toolButtons: els.polmapToolGrid?.querySelectorAll(".polmap-tool"),
+      colorInput: els.polmapColorInput,
+      strokeInput: els.polmapStrokeInput,
+      strokeValue: els.polmapStrokeValue,
+      undoButton: els.polmapUndoButton,
+      clearButton: els.polmapClearButton,
+      viewport: els.polmapViewport,
+      stage: els.polmapStage,
+      mapImage: els.polmapImage,
+      citiesLayer: els.polmapCitiesLayer,
+      markersLayer: els.polmapMarkersLayer,
+      canvas: els.polmapCanvas,
+      cityPopup: els.polmapCityPopup,
+      markerPopup: els.polmapMarkerPopup,
+      markerPopupClose: els.polmapMarkerPopupClose,
+      boardSelect: els.polmapBoardSelect,
+      newBoardButton: els.polmapNewBoardButton,
+      deleteBoardButton: els.polmapDeleteBoardButton,
+      editCitiesToggle: els.polmapEditCitiesToggle,
+      cityEditPanel: els.polmapCityEditPanel,
+    },
+    getPlayers: () => state.players,
+    onPlayerOpen: (playerId) => openPlayerFromMap(playerId),
+    saveBoardData: savePoliticalMapBoardData,
+    createBoard: createPoliticalMapBoard,
+    deleteBoard: deletePoliticalMapBoard,
+    saveCityOverride: savePoliticalMapCityOverride,
+    onBoardChange: switchPoliticalMapBoard,
+    refreshIcons,
+    canEdit: isAdmin(),
+  });
+
+  els.polmapCityPopupClose?.addEventListener("click", () => {
+    els.polmapCityPopup?.classList.remove("is-open");
+    if (els.polmapCityPopup) els.polmapCityPopup.hidden = true;
+  });
+}
+
+function switchPoliticalMapBoard(boardId) {
+  if (unsubActiveBoard) {
+    unsubActiveBoard();
+    unsubActiveBoard = null;
+  }
+  state.polmapActiveBoardId = boardId;
+
+  if (boardId === MAIN_BOARD_ID) {
+    setPoliticalMapBoardData(MAIN_BOARD_ID, { ...state.polmapMainData, isMain: true, name: "Политическая карта" });
+    return;
+  }
+
+  unsubActiveBoard = onSnapshot(doc(db, "politicalMapBoards", boardId), (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data();
+    setPoliticalMapBoardData(boardId, {
+      elements: Array.isArray(data.elements) ? decodePolmapElements(data.elements) : [],
+      markers: Array.isArray(data.markers) ? data.markers : [],
+      isMain: false,
+      name: data.name || "Без названия",
+    });
+  });
+}
+
+// Firestore не поддерживает вложенные массивы (массив внутри массива),
+// а el.points — это как раз массив пар [x, y]. Поэтому при сохранении
+// переводим точки в {x, y}, а при чтении — обратно в [x, y].
+function encodePolmapElements(elements) {
+  return (elements || []).map((el) => ({
+    ...el,
+    points: (el.points || []).map((p) => (Array.isArray(p) ? { x: p[0], y: p[1] } : p)),
+  }));
+}
+
+function decodePolmapElements(elements) {
+  return (elements || []).map((el) => ({
+    ...el,
+    points: (el.points || []).map((p) => (Array.isArray(p) ? p : [p.x, p.y])),
+  }));
+}
+
+async function savePoliticalMapBoardData(boardId, { elements, markers }) {
+  if (!isAdmin()) return;
+  try {
+    const payload = { elements: encodePolmapElements(elements), markers };
+    if (boardId === MAIN_BOARD_ID) {
+      await setDoc(doc(db, "catalog", "politicalMap"), payload);
+    } else {
+      await setDoc(doc(db, "politicalMapBoards", boardId), payload, { merge: true });
+    }
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось сохранить изменения на карте.");
+  }
+}
+
+async function createPoliticalMapBoard(name) {
+  if (!isAdmin()) return null;
+  try {
+    const ref = await addDoc(collection(db, "politicalMapBoards"), {
+      name,
+      elements: [],
+      markers: [],
+      createdAt: Date.now(),
+    });
+    return ref.id;
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось создать новую карту.");
+    return null;
+  }
+}
+
+async function deletePoliticalMapBoard(boardId) {
+  if (!isAdmin() || boardId === MAIN_BOARD_ID) return;
+  try {
+    await deleteDoc(doc(db, "politicalMapBoards", boardId));
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось удалить карту.");
+  }
+}
+
+async function savePoliticalMapCityOverride(cityId, patch) {
+  if (!isAdmin()) return;
+  const next = { ...state.polmapCityOverrides };
+  if (patch) {
+    next[cityId] = patch;
+  } else {
+    delete next[cityId];
+  }
+  try {
+    await setDoc(doc(db, "catalog", "politicalMapCityMeta"), { overrides: next });
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось сохранить изменения города.");
+  }
+}
+
+function openPlayerFromMap(playerId) {
+  switchView("catalog");
+  highlightPlayerCard(playerId);
+}
+
+function highlightPlayerCard(playerId) {
+  state.highlightPlayerId = playerId;
+  renderCatalog();
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`.player-card[data-id="${playerId}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("is-highlighted");
+    window.setTimeout(() => {
+      card.classList.remove("is-highlighted");
+      if (state.highlightPlayerId === playerId) state.highlightPlayerId = null;
+    }, 3200);
+  });
+}
+
+function openCityOnMap(cityId) {
+  if (!cityId) return;
+  switchView("polmap");
+  focusPoliticalCity(cityId);
 }
 
 /* ================= Auth ================= */
@@ -254,6 +533,8 @@ function updateAuthUI() {
   if (els.tierlistToolbar) els.tierlistToolbar.hidden = !loggedIn;
   if (els.tierExportArea) els.tierExportArea.hidden = !loggedIn;
   if (els.tierPoolWrap) els.tierPoolWrap.hidden = !loggedIn;
+
+  setPoliticalMapCanEdit(admin);
 
   refreshIcons();
 }
@@ -319,6 +600,7 @@ function bindEvents() {
     const name = els.name.value.trim();
     const telegram = els.telegram.value.trim() ? normalizeSocialUrl(els.telegram.value.trim(), "t.me") : "";
     const twitch = els.twitch.value.trim() ? normalizeSocialUrl(els.twitch.value.trim(), "twitch.tv") : "";
+    const city = els.city.value || "";
 
     if (!name) return;
 
@@ -330,6 +612,7 @@ function bindEvents() {
       name,
       telegram,
       twitch,
+      city,
       role: wasEditing ? (state.players[existingIndex].role ?? DEFAULT_ROLE) : DEFAULT_ROLE,
     };
 
@@ -479,6 +762,7 @@ function bindEvents() {
   // Tabs
   els.tabCatalog.addEventListener("click", () => switchView("catalog"));
   els.tabTierlist.addEventListener("click", () => switchView("tierlist"));
+  els.tabPolmap.addEventListener("click", () => switchView("polmap"));
 
   // Tierlist controls
   els.tierlistSelect.addEventListener("change", () => {
@@ -638,12 +922,23 @@ function promptModal(title, defaultValue) {
 /* ================= Tabs ================= */
 
 function switchView(view) {
+  state.activeView = view;
   const isCatalog = view === "catalog";
+  const isTierlist = view === "tierlist";
+  const isPolmap = view === "polmap";
+
   els.viewCatalog.hidden = !isCatalog;
-  els.viewTierlist.hidden = isCatalog;
+  els.viewTierlist.hidden = !isTierlist;
+  els.viewPolmap.hidden = !isPolmap;
+
   els.tabCatalog.classList.toggle("is-active", isCatalog);
-  els.tabTierlist.classList.toggle("is-active", !isCatalog);
+  els.tabTierlist.classList.toggle("is-active", isTierlist);
+  els.tabPolmap.classList.toggle("is-active", isPolmap);
+
   els.searchWrap && els.searchWrap.classList.toggle("is-inactive", !isCatalog);
+  document.body.classList.toggle("is-polmap-view", isPolmap);
+
+  if (isPolmap) onPoliticalMapShow();
 }
 
 /* ================= Catalog render ================= */
@@ -678,6 +973,10 @@ function renderCatalog() {
   els.count.textContent = formatCount(players.length);
 
   els.grid.querySelectorAll(".player-card").forEach((card) => observer.observe(card));
+  if (state.highlightPlayerId) {
+    const highlighted = els.grid.querySelector(`.player-card[data-id="${state.highlightPlayerId}"]`);
+    highlighted?.classList.add("is-highlighted");
+  }
   els.grid.querySelectorAll("[data-action='edit']").forEach((button) => {
     button.addEventListener("click", () => editPlayer(button.dataset.id));
   });
@@ -701,6 +1000,9 @@ function renderCatalog() {
       }
     }),
   );
+  els.grid.querySelectorAll("[data-action='open-city']").forEach((button) => {
+    button.addEventListener("click", () => openCityOnMap(button.dataset.cityId));
+  });
   const sc = document.querySelector("#searchClone");
   if (sc && !sc.dataset.b) {
     sc.dataset.b = 1;
@@ -742,14 +1044,23 @@ function playerCard(player) {
       </div>`
     : "";
 
+  const city = getEffectiveCityById(player.city);
+  const cityBadge = city
+    ? `<button class="city-badge" type="button" data-action="open-city" data-city-id="${city.id}" title="Открыть на полит. карте">
+        <i data-lucide="map-pin" aria-hidden="true"></i>
+        <span>${escapeHtml(city.name)}</span>
+      </button>`
+    : "";
+
   return `
-    <article class="player-card" data-id="${player.id}">
+    <article class="player-card${state.highlightPlayerId === player.id ? " is-highlighted" : ""}" data-id="${player.id}">
       <div class="skin-wrap" id="skinWrap-${player.id}">
         ${roleBadge}
         <img src="${escapeAttr(skinBodyUrl(player.name))}" alt="Скин игрока ${escapeAttr(player.name)}" loading="lazy" />
         <button class="skin-toggle" type="button" data-action="toggle-3d" data-id="${player.id}" aria-label="Показать в 3D">
           <i data-lucide="rotate-3d" aria-hidden="true"></i>
         </button>
+        ${cityBadge}
       </div>
       <div class="card-body">
         <div class="card-main">
@@ -826,6 +1137,8 @@ function editPlayer(id) {
   els.name.value = player.name;
   els.telegram.value = player.telegram;
   els.twitch.value = player.twitch || "";
+  els.city.innerHTML = getEffectiveCityOptionsHtml(player.city || "");
+  els.city.value = player.city || "";
   updateSkinPreview();
   openForm();
   els.name.focus();
@@ -879,6 +1192,7 @@ function resetForm() {
   els.formTitle.textContent = "Добавить игрока";
   els.form.reset();
   els.editingId.value = "";
+  els.city.innerHTML = getEffectiveCityOptionsHtml();
   els.skinPreview.hidden = true;
 }
 
@@ -1118,6 +1432,118 @@ function tierChip(playerId) {
       <img src="https://mc-heads.net/avatar/${encodeURIComponent(player.name)}/26" alt="" loading="lazy" crossorigin="anonymous" />
       <span>${escapeHtml(player.name)}</span>
     </div>`;
+}
+
+/* ---------- Превью фото игрока при наведении в тирлисте ---------- */
+
+// Фотки кладутся в assets/players/<имя игрока>.<расширение> — расширение и
+// регистр имени заранее неизвестны, поэтому перебираем варианты и кэшируем результат.
+const PLAYER_PHOTO_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif"];
+const playerPhotoCache = new Map(); // player name -> url string | null (null = фото не найдено)
+let tierPhotoHoveredId = null;
+let tierPhotoRequestToken = 0;
+
+async function findPlayerPhotoUrl(name) {
+  if (playerPhotoCache.has(name)) return playerPhotoCache.get(name);
+  for (const ext of PLAYER_PHOTO_EXTENSIONS) {
+    const url = `assets/players/${encodeURIComponent(name)}.${ext}`;
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+    if (ok) {
+      playerPhotoCache.set(name, url);
+      return url;
+    }
+  }
+  playerPhotoCache.set(name, null);
+  return null;
+}
+
+function setupTierPhotoPreview() {
+  const container = els.viewTierlist;
+  if (!container || !els.tierPhotoPreview || !els.tierPhotoPreviewImg) return;
+
+  container.addEventListener("mouseover", (event) => {
+    const chip = event.target.closest(".tier-chip");
+    if (!chip || !container.contains(chip)) return;
+    if (chip.dataset.playerId === tierPhotoHoveredId) return;
+    tierPhotoHoveredId = chip.dataset.playerId;
+    showTierPhotoPreview(chip);
+  });
+
+  container.addEventListener("mouseout", (event) => {
+    const chip = event.target.closest(".tier-chip");
+    if (!chip) return;
+    const related = event.relatedTarget;
+    if (related && chip.contains(related)) return;
+    tierPhotoHoveredId = null;
+    hideTierPhotoPreview();
+  });
+
+  window.addEventListener("scroll", hideTierPhotoPreview, true);
+  window.addEventListener("resize", hideTierPhotoPreview);
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() !== "f" || event.ctrlKey || event.metaKey || event.altKey) return;
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
+    if (state.activeView !== "tierlist") return;
+
+    state.tierPhotoPreviewEnabled = !state.tierPhotoPreviewEnabled;
+    if (!state.tierPhotoPreviewEnabled) {
+      hideTierPhotoPreview();
+    } else if (tierPhotoHoveredId) {
+      const chip = container.querySelector(`.tier-chip[data-player-id="${CSS.escape(tierPhotoHoveredId)}"]`);
+      if (chip) showTierPhotoPreview(chip);
+    }
+  });
+}
+
+async function showTierPhotoPreview(chip) {
+  if (!state.tierPhotoPreviewEnabled) return;
+  const playerId = chip.dataset.playerId;
+  const player = state.players.find((item) => item.id === playerId);
+  if (!player) return;
+
+  const token = ++tierPhotoRequestToken;
+  const url = await findPlayerPhotoUrl(player.name);
+  if (token !== tierPhotoRequestToken) return; // навели на другого игрока, пока грузилось
+  if (tierPhotoHoveredId !== playerId) return;
+  if (!url) {
+    hideTierPhotoPreview();
+    return;
+  }
+
+  els.tierPhotoPreviewImg.src = url;
+  els.tierPhotoPreviewImg.alt = player.name;
+  els.tierPhotoPreview.hidden = false;
+  positionTierPhotoPreview(chip);
+}
+
+function hideTierPhotoPreview() {
+  if (els.tierPhotoPreview) els.tierPhotoPreview.hidden = true;
+}
+
+function positionTierPhotoPreview(chip) {
+  const preview = els.tierPhotoPreview;
+  if (!preview) return;
+  const margin = 10;
+  const chipRect = chip.getBoundingClientRect();
+  const previewRect = preview.getBoundingClientRect();
+
+  let top = chipRect.top - previewRect.height - margin;
+  if (top < margin) {
+    top = chipRect.bottom + margin;
+  }
+  let left = chipRect.left + chipRect.width / 2 - previewRect.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - previewRect.width - margin));
+
+  preview.style.left = `${left}px`;
+  preview.style.top = `${top}px`;
 }
 
 function bindTierFieldEvents() {
