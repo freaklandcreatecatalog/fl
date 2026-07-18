@@ -45,6 +45,10 @@
             <i data-lucide="map" aria-hidden="true"></i>
             <span>Полит. карта</span>
           </button>
+          <button class="tab-button admin-only" id="tabVoting" type="button" data-view="voting" hidden>
+            <i data-lucide="vote" aria-hidden="true"></i>
+            <span>Голосование</span>
+          </button>
         </nav>
 
         <div class="header-actions">
@@ -161,9 +165,6 @@
 
       <!-- TIERLIST VIEW -->
       <section class="view" id="viewTierlist" hidden>
-        <div class="tier-photo-preview" id="tierPhotoPreview" hidden>
-          <img id="tierPhotoPreviewImg" alt="" />
-        </div>
         <section class="intro">
           <div>
             <p class="kicker">Тирлист</p>
@@ -331,9 +332,14 @@
             <div class="polmap-city-edit-panel" id="polmapCityEditPanel" hidden>
               <div class="polmap-city-popup-head">
                 <h3>Город</h3>
-                <button class="icon-button quiet" type="button" data-action="close" aria-label="Закрыть">
-                  <i data-lucide="x" aria-hidden="true"></i>
-                </button>
+                <span class="polmap-city-popup-head-actions">
+                  <button class="icon-button quiet" type="button" data-action="show-players" aria-label="Участники города" title="Показать участников">
+                    <i data-lucide="users" aria-hidden="true"></i>
+                  </button>
+                  <button class="icon-button quiet" type="button" data-action="close" aria-label="Закрыть">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                  </button>
+                </span>
               </div>
               <label class="polmap-edit-field">
                 <span>Название</span>
@@ -356,6 +362,29 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- VOTING VIEW (только для админов) -->
+      <section class="view" id="viewVoting" hidden>
+        <section class="intro">
+          <div>
+            <p class="kicker">Голосование</p>
+            <h1>Кто вызывает больше всего эмоций?</h1>
+          </div>
+        </section>
+
+        <section class="voting-admin-toolbar">
+          <div class="voting-timer-block">
+            <span class="voting-timer-label">До следующего голосования</span>
+            <span class="voting-timer" id="votingCountdown">—</span>
+          </div>
+          <button class="primary-button" id="forceVotingRoundButton" type="button">
+            <i data-lucide="zap" aria-hidden="true"></i>
+            <span>Начать голосование сейчас</span>
+          </button>
+        </section>
+
+        <section class="voting-admin-grid" id="votingAdminGrid"></section>
       </section>
     </main>
 
@@ -460,7 +489,7 @@
       </div>
     </div>
 
-    <!-- TIERLIST NAME PROMPT MODAL -->
+<!-- TIERLIST NAME PROMPT MODAL -->
     <div class="modal-backdrop" id="nameModalBackdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="nameModalTitle">
         <div class="modal-head">
@@ -479,6 +508,39 @@
             <span>Готово</span>
           </button>
         </form>
+      </div>
+    </div>
+
+    <!-- VOTING PLAYER STATS MODAL (админ) -->
+    <div class="modal-backdrop" id="votingStatsModalBackdrop" hidden>
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="votingStatsModalTitle">
+        <div class="modal-head">
+          <h2 id="votingStatsModalTitle">Игрок</h2>
+          <button class="icon-button quiet" id="closeVotingStatsModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="voting-stats-summary" id="votingStatsSummary"></div>
+        <div class="voting-stats-chart" id="votingStatsChart"></div>
+        <p class="voting-stats-legend">
+          <span class="legend-dot legend-fav"></span> Любимый
+          <span class="legend-dot legend-unfav"></span> Нелюбимый
+        </p>
+      </div>
+    </div>
+
+    <!-- VOTING WIDGET -->
+    <div class="voting-bar" id="votingBar" hidden>
+      <div class="voting-bar-inner">
+        <div class="voting-info">
+          <p class="voting-title" id="votingTitle">Выбери 3 самых любимых</p>
+          <p class="voting-hint" id="votingHint">Любимые: 0/3 · Нелюбимые: 0/3</p>
+        </div>
+        <div class="voting-heads" id="votingHeads"></div>
+        <button class="primary-button" id="votingSubmitButton" type="button" disabled>
+          <i data-lucide="send" aria-hidden="true"></i>
+          <span>Отправить</span>
+        </button>
       </div>
     </div>
 

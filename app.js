@@ -21,6 +21,8 @@ import {
   where,
   orderBy,
   limit,
+  runTransaction,
+  increment,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   initPoliticalMap,
@@ -64,6 +66,27 @@ const THEME_KEY = "freakland-create-theme";
 const LOG_MAX_ENTRIES = 300;
 const DEFAULT_ROLE = "Игрок";
 
+/* ================= Voting (кто вызывает больше эмоций) ================= */
+const VOTE_PERIOD_MS = 3 * 60 * 60 * 1000; // раунд голосования — каждые 3 часа "мирового времени"
+const VOTE_ROUND_SIZE = 10;
+const VOTE_PICK_SIZE = 3; // сколько любимых нужно выбрать — строго 3
+const VOTE_MIN_UNFAV = 1; // сколько нелюбимых нужно минимум — 1, можно больше
+const VOTE_LOCAL_KEY = "freakland-vote-round"; // на каком раунде это устройство уже проголосовало
+const ADMIN_ROLE_TEXT = "админ";
+
+function isAdminRoleText(role) {
+  return (role || "").trim().toLowerCase() === ADMIN_ROLE_TEXT;
+}
+
+function shuffleArray(list) {
+  const arr = list.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 const DEFAULT_TIER_TEMPLATE = () => [
   { id: crypto.randomUUID(), name: "S", color: "#f6d55c", playerIds: [] },
   { id: crypto.randomUUID(), name: "A", color: "#8ce99a", playerIds: [] },
@@ -89,7 +112,12 @@ const state = {
   polmapActiveBoardId: "main",
   polmapCityOverrides: {},
   tierPhotoPreviewEnabled: true,
+  voting: { roundStartAt: null, playerIds: [], usedPool: [], favScores: {}, unfavScores: {} },
+  votingSelection: { favorites: [], unfavorites: [] },
+  votingHistory: [],
 };
+
+let unsubVotingHistory = null;
 
 let unsubTierlists = null;
 let unsubActiveBoard = null;
@@ -164,12 +192,30 @@ const els = {
   nameModalInput: document.querySelector("#nameModalInput"),
   nameModalTitle: document.querySelector("#nameModalTitle"),
 
+  votingBar: document.querySelector("#votingBar"),
+  votingTitle: document.querySelector("#votingTitle"),
+  votingHint: document.querySelector("#votingHint"),
+  votingHeads: document.querySelector("#votingHeads"),
+  votingSubmitButton: document.querySelector("#votingSubmitButton"),
+
   tabCatalog: document.querySelector("#tabCatalog"),
   tabTierlist: document.querySelector("#tabTierlist"),
   tabPolmap: document.querySelector("#tabPolmap"),
+  tabVoting: document.querySelector("#tabVoting"),
   viewCatalog: document.querySelector("#viewCatalog"),
   viewTierlist: document.querySelector("#viewTierlist"),
   viewPolmap: document.querySelector("#viewPolmap"),
+  viewVoting: document.querySelector("#viewVoting"),
+
+  votingCountdown: document.querySelector("#votingCountdown"),
+  forceVotingRoundButton: document.querySelector("#forceVotingRoundButton"),
+  votingAdminGrid: document.querySelector("#votingAdminGrid"),
+
+  votingStatsModal: document.querySelector("#votingStatsModalBackdrop"),
+  closeVotingStatsModal: document.querySelector("#closeVotingStatsModal"),
+  votingStatsModalTitle: document.querySelector("#votingStatsModalTitle"),
+  votingStatsSummary: document.querySelector("#votingStatsSummary"),
+  votingStatsChart: document.querySelector("#votingStatsChart"),
 
   tierlistLoginRequired: document.querySelector("#tierlistLoginRequired"),
   tierlistLoginButton: document.querySelector("#tierlistLoginButton"),
@@ -187,8 +233,6 @@ const els = {
   tierPoolWrap: document.querySelector("#tierPoolWrap"),
   tierRows: document.querySelector("#tierRows"),
   tierPool: document.querySelector("#tierPool"),
-  tierPhotoPreview: document.querySelector("#tierPhotoPreview"),
-  tierPhotoPreviewImg: document.querySelector("#tierPhotoPreviewImg"),
 
   polmapToolbar: document.querySelector("#polmapToolbar"),
   polmapDrawModeToggle: document.querySelector("#polmapDrawModeToggle"),
@@ -245,7 +289,28 @@ async function init() {
     renderCatalog();
     renderTierlist();
     updatePoliticalMapPopulation();
+    ensureVotingRound();
+    renderVotingWidget();
   });
+
+  // Голосование "кто вызывает больше эмоций" — публичное чтение, раунд общий для всех
+  onSnapshot(doc(db, "catalog", "voting"), (snap) => {
+    const data = snap.exists() ? snap.data() : null;
+    state.voting = {
+      roundStartAt: typeof data?.roundStartAt === "number" ? data.roundStartAt : null,
+      playerIds: Array.isArray(data?.playerIds) ? data.playerIds : [],
+      usedPool: Array.isArray(data?.usedPool) ? data.usedPool : [],
+      favScores: data && typeof data.favScores === "object" && data.favScores ? data.favScores : {},
+      unfavScores: data && typeof data.unfavScores === "object" && data.unfavScores ? data.unfavScores : {},
+    };
+    renderVotingWidget();
+    renderCatalog();
+    updateVotingCountdown();
+    if (state.activeView === "voting") renderVotingAdminGrid();
+  });
+  updateVotingCountdown();
+  setInterval(updateVotingCountdown, 1000);
+  setInterval(ensureVotingRound, 60 * 1000);
 
   // Основная карта (elements + markers) — публичное чтение
   onSnapshot(doc(db, "catalog", "politicalMap"), (snap) => {
@@ -270,7 +335,8 @@ async function init() {
 
   // Правки городов (имя/цвет/контур), которые вносят админы
   onSnapshot(doc(db, "catalog", "politicalMapCityMeta"), (snap) => {
-    state.polmapCityOverrides = snap.exists() && snap.data().overrides ? snap.data().overrides : {};
+    const rawOverrides = snap.exists() && snap.data().overrides ? snap.data().overrides : {};
+    state.polmapCityOverrides = deserializeCityOverrides(rawOverrides);
     setPoliticalMapCityOverrides(state.polmapCityOverrides);
     renderCatalog();
     if (els.formPanel?.classList.contains("is-open")) {
@@ -286,8 +352,13 @@ async function init() {
         unsubTierlists();
         unsubTierlists = null;
       }
+      if (unsubVotingHistory) {
+        unsubVotingHistory();
+        unsubVotingHistory = null;
+      }
       state.tierlists = {};
       state.activeTierlist = "";
+      state.votingHistory = [];
       updateAuthUI();
       renderCatalog();
       renderTierlist();
@@ -302,10 +373,30 @@ async function init() {
     const data = userSnap.data();
     state.user = { uid: fbUser.uid, nickname: data.nickname, isAdmin: Boolean(data.isAdmin), isMain: Boolean(data.isMain) };
     subscribeTierlists(fbUser.uid);
+    subscribeVotingHistory();
     updateAuthUI();
     renderCatalog();
     renderTierlist();
   });
+}
+
+// История баллов голосования (снимки при каждой смене раунда) — только для админов,
+// нужна для графиков "как менялась популярность игрока" на вкладке "Голосование".
+function subscribeVotingHistory() {
+  if (unsubVotingHistory) {
+    unsubVotingHistory();
+    unsubVotingHistory = null;
+  }
+  if (!isAdmin()) return;
+  const q = query(collection(db, "votingHistory"), orderBy("timestamp", "asc"), limit(500));
+  unsubVotingHistory = onSnapshot(
+    q,
+    (snap) => {
+      state.votingHistory = snap.docs.map((d) => d.data());
+      if (state.activeView === "voting") renderVotingAdminGrid();
+    },
+    (error) => console.error("Не получилось загрузить историю голосования", error),
+  );
 }
 
 function populateCitySelect() {
@@ -464,16 +555,46 @@ async function savePoliticalMapCityOverride(cityId, patch) {
   if (!isAdmin()) return;
   const next = { ...state.polmapCityOverrides };
   if (patch) {
-    next[cityId] = patch;
+    // Убираем поля со значением undefined — Firestore не принимает undefined в документе.
+    const clean = {};
+    Object.entries(patch).forEach(([key, value]) => {
+      if (value !== undefined) clean[key] = value;
+    });
+    next[cityId] = clean;
   } else {
     delete next[cityId];
   }
   try {
-    await setDoc(doc(db, "catalog", "politicalMapCityMeta"), { overrides: next });
+    await setDoc(doc(db, "catalog", "politicalMapCityMeta"), { overrides: serializeCityOverrides(next) });
   } catch (error) {
     console.error(error);
     alert("Не получилось сохранить изменения города.");
   }
+}
+
+// Firestore не поддерживает массивы-в-массивах (nested arrays), а region — это
+// список точек контура вида [[x,y],[x,y],...]. Поэтому при сохранении превращаем
+// каждую точку в объект {x, y}, а при чтении — обратно в пару [x, y].
+function serializeCityOverrides(overrides) {
+  const result = {};
+  Object.entries(overrides || {}).forEach(([cityId, patch]) => {
+    result[cityId] = {
+      ...patch,
+      region: Array.isArray(patch.region) ? patch.region.map(([x, y]) => ({ x, y })) : patch.region,
+    };
+  });
+  return result;
+}
+
+function deserializeCityOverrides(overrides) {
+  const result = {};
+  Object.entries(overrides || {}).forEach(([cityId, patch]) => {
+    const region = Array.isArray(patch.region)
+      ? patch.region.map((point) => (Array.isArray(point) ? [point[0], point[1]] : [point.x, point.y]))
+      : patch.region;
+    result[cityId] = { ...patch, region };
+  });
+  return result;
 }
 
 function openPlayerFromMap(playerId) {
@@ -524,6 +645,12 @@ function updateAuthUI() {
     node.hidden = !admin;
   });
 
+  if (!admin && state.activeView === "voting") {
+    switchView("catalog");
+  } else if (admin && state.activeView === "voting") {
+    renderVotingAdminGrid();
+  }
+
   els.loginButton.hidden = loggedIn;
   els.logoutButton.hidden = !loggedIn;
   els.openAdmins.hidden = !isMainAdmin();
@@ -535,6 +662,22 @@ function updateAuthUI() {
   if (els.tierPoolWrap) els.tierPoolWrap.hidden = !loggedIn;
 
   setPoliticalMapCanEdit(admin);
+
+  let ratingOption = els.sortSelect ? els.sortSelect.querySelector('option[value="rating-desc"]') : null;
+  if (els.sortSelect) {
+    if (admin && !ratingOption) {
+      ratingOption = document.createElement("option");
+      ratingOption.value = "rating-desc";
+      ratingOption.textContent = "По баллам голосования (админ)";
+      els.sortSelect.appendChild(ratingOption);
+    } else if (!admin && ratingOption) {
+      ratingOption.remove();
+      if (state.sort === "rating-desc") {
+        state.sort = "alpha-asc";
+        els.sortSelect.value = "alpha-asc";
+      }
+    }
+  }
 
   refreshIcons();
 }
@@ -560,6 +703,304 @@ function skinTextureUrl(name) {
   return `https://mc-heads.net/skin/${encodeURIComponent(name || "Steve")}`;
 }
 
+function skinHeadUrl(name) {
+  return `https://mc-heads.net/avatar/${encodeURIComponent(name || "Steve")}/64`;
+}
+
+/* ================= Voting (кто вызывает больше эмоций) ================= */
+
+// Раунд считается по "мировому" времени от момента старта раунда (roundStartAt),
+// который лежит в общем документе Firestore — поэтому у всех посетителей один и тот
+// же раунд, и он не пересоздаётся при перезаходе на сайт.
+async function ensureVotingRound(force = false) {
+  const now = Date.now();
+  if (!force) {
+    if (state.voting.roundStartAt && now < state.voting.roundStartAt + VOTE_PERIOD_MS) return;
+  } else if (!isAdmin()) {
+    return;
+  }
+  if (!state.players.length) return;
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const ref = doc(db, "catalog", "voting");
+      const snap = await tx.get(ref);
+      const data = snap.exists() ? snap.data() : {};
+      const currentStart = typeof data.roundStartAt === "number" ? data.roundStartAt : 0;
+
+      if (!force && currentStart && Date.now() < currentStart + VOTE_PERIOD_MS) return; // кто-то уже обновил раунд
+
+      const eligible = state.players.filter((player) => !isAdminRoleText(player.role));
+      let usedPool = Array.isArray(data.usedPool)
+        ? data.usedPool.filter((id) => eligible.some((player) => player.id === id))
+        : [];
+
+      let candidates = eligible.filter((player) => !usedPool.includes(player.id));
+      if (candidates.length === 0) {
+        usedPool = [];
+        candidates = eligible.slice();
+      }
+
+      const count = Math.min(VOTE_ROUND_SIZE, candidates.length);
+      const selected = shuffleArray(candidates)
+        .slice(0, count)
+        .map((player) => player.id);
+      const newUsedPool = [...usedPool, ...selected];
+
+      const favScores = data.favScores && typeof data.favScores === "object" ? data.favScores : {};
+      const unfavScores = data.unfavScores && typeof data.unfavScores === "object" ? data.unfavScores : {};
+
+      // Снимок баллов на момент смены раунда — нужен для графика "как менялась популярность" у админов.
+      if (snap.exists() && currentStart) {
+        const histRef = doc(collection(db, "votingHistory"));
+        tx.set(histRef, {
+          timestamp: now,
+          favScores,
+          unfavScores,
+        });
+      }
+
+      tx.set(ref, {
+        roundStartAt: now,
+        playerIds: selected,
+        usedPool: newUsedPool,
+        favScores,
+        unfavScores,
+      });
+    });
+  } catch (error) {
+    console.error("Не получилось обновить раунд голосования", error);
+  }
+}
+
+async function forceNewVotingRound() {
+  if (!isAdmin() || !els.forceVotingRoundButton) return;
+  const ok = confirm("Начать новое голосование прямо сейчас? Текущая десятка сменится немедленно.");
+  if (!ok) return;
+
+  els.forceVotingRoundButton.disabled = true;
+  try {
+    await ensureVotingRound(true);
+    logAction("Запущено внеочередное голосование (без таймера)");
+  } finally {
+    els.forceVotingRoundButton.disabled = false;
+  }
+}
+
+function updateVotingCountdown() {
+  if (!els.votingCountdown) return;
+  const start = state.voting.roundStartAt;
+  if (!start) {
+    els.votingCountdown.textContent = "—";
+    return;
+  }
+  const remaining = Math.max(0, start + VOTE_PERIOD_MS - Date.now());
+  const totalSec = Math.floor(remaining / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  els.votingCountdown.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function hasVotedThisRound() {
+  const votedRound = Number(localStorage.getItem(VOTE_LOCAL_KEY));
+  return Number.isFinite(votedRound) && state.voting.roundStartAt !== null && votedRound === state.voting.roundStartAt;
+}
+
+function renderVotingWidget() {
+  if (!els.votingBar) return;
+
+  const playerIds = state.voting.playerIds || [];
+  const players = playerIds.map((id) => state.players.find((player) => player.id === id)).filter(Boolean);
+
+  if (!players.length || state.voting.roundStartAt === null || hasVotedThisRound()) {
+    els.votingBar.hidden = true;
+    return;
+  }
+
+  els.votingBar.hidden = false;
+
+  const sel = state.votingSelection;
+  if (sel.favorites.length < VOTE_PICK_SIZE) {
+    els.votingTitle.textContent = "Выбери 3 самых любимых";
+  } else if (sel.unfavorites.length < VOTE_MIN_UNFAV) {
+    els.votingTitle.textContent = "Теперь выбери хотя бы 1 самого нелюбимого";
+  } else {
+    els.votingTitle.textContent = "Готово — жми «Отправить»";
+  }
+  els.votingHint.textContent = `Любимые: ${sel.favorites.length}/${VOTE_PICK_SIZE} · Нелюбимые: ${sel.unfavorites.length} (мин. ${VOTE_MIN_UNFAV})`;
+
+  els.votingHeads.innerHTML = players.map(votingHeadHtml).join("");
+  els.votingHeads.querySelectorAll("[data-action='voting-head']").forEach((el) => {
+    el.addEventListener("click", () => handleVotingHeadClick(el.dataset.id));
+  });
+
+  els.votingSubmitButton.disabled = !(sel.favorites.length === VOTE_PICK_SIZE && sel.unfavorites.length >= VOTE_MIN_UNFAV);
+
+  refreshIcons();
+}
+
+function votingHeadHtml(player) {
+  const sel = state.votingSelection;
+  let stateClass = "";
+  if (sel.favorites.includes(player.id)) stateClass = " is-fav";
+  else if (sel.unfavorites.includes(player.id)) stateClass = " is-unfav";
+
+  return `
+    <button class="voting-head${stateClass}" type="button" data-action="voting-head" data-id="${player.id}">
+      <span class="voting-head-avatar"><img src="${escapeAttr(skinHeadUrl(player.name))}" alt="" loading="lazy" /></span>
+      <span class="voting-head-name">${escapeHtml(player.name)}</span>
+    </button>`;
+}
+
+function handleVotingHeadClick(id) {
+  const sel = state.votingSelection;
+  if (sel.favorites.includes(id)) {
+    sel.favorites = sel.favorites.filter((x) => x !== id);
+  } else if (sel.unfavorites.includes(id)) {
+    sel.unfavorites = sel.unfavorites.filter((x) => x !== id);
+  } else if (sel.favorites.length < VOTE_PICK_SIZE) {
+    sel.favorites.push(id);
+  } else {
+    sel.unfavorites.push(id);
+  }
+  renderVotingWidget();
+}
+
+async function submitVote() {
+  const sel = state.votingSelection;
+  if (sel.favorites.length !== VOTE_PICK_SIZE || sel.unfavorites.length < VOTE_MIN_UNFAV) return;
+  const roundStartAt = state.voting.roundStartAt;
+  if (roundStartAt === null) return;
+
+  els.votingSubmitButton.disabled = true;
+  const patch = {};
+  sel.favorites.forEach((id) => {
+    patch[`favScores.${id}`] = increment(1);
+  });
+  sel.unfavorites.forEach((id) => {
+    patch[`unfavScores.${id}`] = increment(1);
+  });
+
+  try {
+    await updateDoc(doc(db, "catalog", "voting"), patch);
+    localStorage.setItem(VOTE_LOCAL_KEY, String(roundStartAt));
+    state.votingSelection = { favorites: [], unfavorites: [] };
+    renderVotingWidget();
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось отправить голос. Попробуй ещё раз.");
+    els.votingSubmitButton.disabled = false;
+  }
+}
+
+/* ================= Voting admin tab ================= */
+
+function renderVotingAdminGrid() {
+  if (!els.votingAdminGrid || !isAdmin()) return;
+
+  const players = state.players.slice().sort((a, b) => {
+    const totalA = ((state.voting.favScores || {})[a.id] || 0) + ((state.voting.unfavScores || {})[a.id] || 0);
+    const totalB = ((state.voting.favScores || {})[b.id] || 0) + ((state.voting.unfavScores || {})[b.id] || 0);
+    if (totalB !== totalA) return totalB - totalA;
+    return a.name.localeCompare(b.name, "ru");
+  });
+
+  els.votingAdminGrid.innerHTML = players.length
+    ? players.map(votingAdminCardHtml).join("")
+    : `<p class="voting-admin-empty">В каталоге пока нет игроков.</p>`;
+
+  els.votingAdminGrid.querySelectorAll("[data-action='voting-open-stats']").forEach((el) => {
+    el.addEventListener("click", () => openVotingStatsModal(el.dataset.id));
+  });
+
+  refreshIcons();
+}
+
+function votingAdminCardHtml(player) {
+  const fav = (state.voting.favScores || {})[player.id] || 0;
+  const unfav = (state.voting.unfavScores || {})[player.id] || 0;
+  return `
+    <button class="voting-admin-card" type="button" data-action="voting-open-stats" data-id="${player.id}">
+      <span class="voting-admin-avatar"><img src="${escapeAttr(skinHeadUrl(player.name))}" alt="" loading="lazy" /></span>
+      <span class="voting-admin-name" title="${escapeAttr(player.name)}">${escapeHtml(player.name)}</span>
+      <span class="voting-admin-counts">
+        <span class="count-fav"><i data-lucide="heart" aria-hidden="true"></i>${fav}</span>
+        <span class="count-unfav"><i data-lucide="heart-crack" aria-hidden="true"></i>${unfav}</span>
+      </span>
+    </button>`;
+}
+
+function openVotingStatsModal(playerId) {
+  const player = state.players.find((item) => item.id === playerId);
+  if (!player || !els.votingStatsModal) return;
+
+  const fav = (state.voting.favScores || {})[playerId] || 0;
+  const unfav = (state.voting.unfavScores || {})[playerId] || 0;
+
+  els.votingStatsModalTitle.textContent = player.name;
+  els.votingStatsSummary.innerHTML = `
+    <div class="voting-stats-stat"><span class="count-fav"><i data-lucide="heart" aria-hidden="true"></i> ${fav}</span><small>любимый</small></div>
+    <div class="voting-stats-stat"><span class="count-unfav"><i data-lucide="heart-crack" aria-hidden="true"></i> ${unfav}</span><small>нелюбимый</small></div>
+  `;
+  els.votingStatsChart.innerHTML = buildVotingChartSvg(playerId);
+
+  openModal(els.votingStatsModal);
+  refreshIcons();
+}
+
+function buildVotingChartSvg(playerId) {
+  const points = [
+    ...state.votingHistory,
+    { timestamp: Date.now(), favScores: state.voting.favScores || {}, unfavScores: state.voting.unfavScores || {} },
+  ];
+
+  const series = points.map((entry) => ({
+    t: entry.timestamp,
+    fav: (entry.favScores || {})[playerId] || 0,
+    unfav: (entry.unfavScores || {})[playerId] || 0,
+  }));
+
+  if (series.length < 2) {
+    return `<p class="voting-chart-empty">Пока недостаточно данных для графика — точка появится после первой смены раунда.</p>`;
+  }
+
+  const width = 640;
+  const height = 220;
+  const padL = 30;
+  const padR = 12;
+  const padT = 16;
+  const padB = 26;
+  const minT = series[0].t;
+  const maxT = series[series.length - 1].t;
+  const maxVal = Math.max(1, ...series.map((p) => Math.max(p.fav, p.unfav)));
+
+  const x = (t) => padL + ((t - minT) / Math.max(1, maxT - minT)) * (width - padL - padR);
+  const y = (v) => height - padB - (v / maxVal) * (height - padT - padB);
+
+  const favPath = series.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.fav).toFixed(1)}`).join(" ");
+  const unfavPath = series.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.unfav).toFixed(1)}`).join(" ");
+
+  const fmt = (t) => new Date(t).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+  const gridLines = [0, 0.5, 1]
+    .map((f) => {
+      const val = Math.round(maxVal * f);
+      const yy = y(val);
+      return `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width - padR}" y2="${yy.toFixed(1)}" class="voting-chart-grid" /><text x="${padL - 6}" y="${(yy + 3).toFixed(1)}" class="voting-chart-axis-label" text-anchor="end">${val}</text>`;
+    })
+    .join("");
+
+  return `
+    <svg class="voting-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="График голосов">
+      ${gridLines}
+      <text x="${padL}" y="${height - 6}" class="voting-chart-axis-label">${fmt(minT)}</text>
+      <text x="${width - padR}" y="${height - 6}" class="voting-chart-axis-label" text-anchor="end">${fmt(maxT)}</text>
+      <path d="${favPath}" class="voting-chart-line voting-chart-line-fav" fill="none" />
+      <path d="${unfavPath}" class="voting-chart-line voting-chart-line-unfav" fill="none" />
+    </svg>`;
+}
+
 /* ================= Bind events ================= */
 
 function bindEvents() {
@@ -583,6 +1024,10 @@ function bindEvents() {
     state.sort = event.target.value;
     renderCatalog();
   });
+
+  if (els.votingSubmitButton) {
+    els.votingSubmitButton.addEventListener("click", submitVote);
+  }
 
   els.themeToggle.addEventListener("click", () => {
     const nextTheme = els.root.dataset.theme === "dark" ? "light" : "dark";
@@ -763,6 +1208,10 @@ function bindEvents() {
   els.tabCatalog.addEventListener("click", () => switchView("catalog"));
   els.tabTierlist.addEventListener("click", () => switchView("tierlist"));
   els.tabPolmap.addEventListener("click", () => switchView("polmap"));
+  els.tabVoting?.addEventListener("click", () => switchView("voting"));
+
+  els.forceVotingRoundButton?.addEventListener("click", forceNewVotingRound);
+  els.closeVotingStatsModal?.addEventListener("click", () => closeModal(els.votingStatsModal));
 
   // Tierlist controls
   els.tierlistSelect.addEventListener("change", () => {
@@ -847,16 +1296,16 @@ function bindEvents() {
   els.exportTierlistButton.addEventListener("click", exportTierlistAsImage);
 
   // Generic modal close on backdrop click + escape
-  [els.loginModal, els.adminsModal, els.logModal, els.nameModal].forEach((modal) => {
-    modal.addEventListener("click", (event) => {
+  [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal].forEach((modal) => {
+    modal?.addEventListener("click", (event) => {
       if (event.target === modal) closeModal(modal);
     });
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    [els.loginModal, els.adminsModal, els.logModal, els.nameModal].forEach((modal) => {
-      if (!modal.hidden) closeModal(modal);
+    [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal].forEach((modal) => {
+      if (modal && !modal.hidden) closeModal(modal);
     });
   });
 
@@ -922,23 +1371,28 @@ function promptModal(title, defaultValue) {
 /* ================= Tabs ================= */
 
 function switchView(view) {
+  if (view === "voting" && !isAdmin()) view = "catalog";
   state.activeView = view;
   const isCatalog = view === "catalog";
   const isTierlist = view === "tierlist";
   const isPolmap = view === "polmap";
+  const isVoting = view === "voting";
 
   els.viewCatalog.hidden = !isCatalog;
   els.viewTierlist.hidden = !isTierlist;
   els.viewPolmap.hidden = !isPolmap;
+  if (els.viewVoting) els.viewVoting.hidden = !isVoting;
 
   els.tabCatalog.classList.toggle("is-active", isCatalog);
   els.tabTierlist.classList.toggle("is-active", isTierlist);
   els.tabPolmap.classList.toggle("is-active", isPolmap);
+  els.tabVoting?.classList.toggle("is-active", isVoting);
 
   els.searchWrap && els.searchWrap.classList.toggle("is-inactive", !isCatalog);
   document.body.classList.toggle("is-polmap-view", isPolmap);
 
   if (isPolmap) onPoliticalMapShow();
+  if (isVoting) renderVotingAdminGrid();
 }
 
 /* ================= Catalog render ================= */
@@ -947,6 +1401,12 @@ function renderCatalog() {
   let players = state.players.filter((player) => player.name.toLowerCase().includes(state.query));
 
   players = players.slice().sort((a, b) => {
+    if (state.sort === "rating-desc") {
+      const scoreA = ((state.voting.favScores || {})[a.id] || 0) + ((state.voting.unfavScores || {})[a.id] || 0);
+      const scoreB = ((state.voting.favScores || {})[b.id] || 0) + ((state.voting.unfavScores || {})[b.id] || 0);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return a.name.localeCompare(b.name, "ru");
+    }
     if (state.sort === "alpha-desc") return b.name.localeCompare(a.name, "ru");
     return a.name.localeCompare(b.name, "ru");
   });
@@ -1021,6 +1481,11 @@ function playerCard(player) {
     ? `<div class="role-badge-wrap"><span class="role-badge${isAdmin() ? " is-editable" : ""}${roleText ? "" : " is-empty"}" data-action="edit-role" data-id="${player.id}">${escapeHtml(roleText || "+ статус")}</span>${isAdmin() && roleText ? `<i class="role-delete" data-action="clear-role" data-id="${player.id}">✕</i>` : ""}</div>`
     : "";
 
+  const voteScore = ((state.voting.favScores || {})[player.id] || 0) + ((state.voting.unfavScores || {})[player.id] || 0);
+  const scoreBadge = isAdmin()
+    ? `<span class="vote-score-badge" title="Баллы голосования (видно только админам)"><i data-lucide="flame" aria-hidden="true"></i>${voteScore}</span>`
+    : "";
+
   const socials = [
     player.telegram
       ? `<a class="social-link" href="${escapeAttr(player.telegram)}" target="_blank" rel="noreferrer" aria-label="Telegram ${escapeAttr(player.name)}"><i data-lucide="send" aria-hidden="true"></i></a>`
@@ -1056,6 +1521,7 @@ function playerCard(player) {
     <article class="player-card${state.highlightPlayerId === player.id ? " is-highlighted" : ""}" data-id="${player.id}">
       <div class="skin-wrap" id="skinWrap-${player.id}">
         ${roleBadge}
+        ${scoreBadge}
         <img src="${escapeAttr(skinBodyUrl(player.name))}" alt="Скин игрока ${escapeAttr(player.name)}" loading="lazy" />
         <button class="skin-toggle" type="button" data-action="toggle-3d" data-id="${player.id}" aria-label="Показать в 3D">
           <i data-lucide="rotate-3d" aria-hidden="true"></i>
@@ -1390,6 +1856,8 @@ function renderTierlist() {
 
   bindTierDragEvents();
   bindTierFieldEvents();
+  attachTierChipPhotos(els.tierRows);
+  attachTierChipPhotos(els.tierPool);
   refreshIcons();
 }
 
@@ -1431,6 +1899,7 @@ function tierChip(playerId) {
     <div class="tier-chip" draggable="true" data-player-id="${player.id}">
       <img src="https://mc-heads.net/avatar/${encodeURIComponent(player.name)}/26" alt="" loading="lazy" crossorigin="anonymous" />
       <span>${escapeHtml(player.name)}</span>
+      <div class="tier-chip-photo"><img alt="" /></div>
     </div>`;
 }
 
@@ -1438,112 +1907,67 @@ function tierChip(playerId) {
 
 // Фотки кладутся в assets/players/<имя игрока>.<расширение> — расширение и
 // регистр имени заранее неизвестны, поэтому перебираем варианты и кэшируем результат.
-const PLAYER_PHOTO_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif"];
-const playerPhotoCache = new Map(); // player name -> url string | null (null = фото не найдено)
-let tierPhotoHoveredId = null;
-let tierPhotoRequestToken = 0;
+// Показ/скрытие самого превью целиком на CSS (:hover) — JS только один раз
+// подставляет src и добавляет класс has-photo, если файл нашёлся, поэтому
+// оно физически не может остаться висеть после того, как убрали курсор.
+const PLAYER_PHOTO_EXTENSIONS = ["webp", "png", "jpg", "jpeg", "gif"];
+const playerPhotoLookups = new Map(); // player name -> Promise<string|null>
 
-async function findPlayerPhotoUrl(name) {
-  if (playerPhotoCache.has(name)) return playerPhotoCache.get(name);
-  for (const ext of PLAYER_PHOTO_EXTENSIONS) {
-    const url = `assets/players/${encodeURIComponent(name)}.${ext}`;
-    // eslint-disable-next-line no-await-in-loop
+function probePlayerPhoto(name) {
+  const tryExt = async (i) => {
+    if (i >= PLAYER_PHOTO_EXTENSIONS.length) return null;
+    const url = `assets/players/${encodeURIComponent(name)}.${PLAYER_PHOTO_EXTENSIONS[i]}`;
     const ok = await new Promise((resolve) => {
       const img = new Image();
       img.onload = () => resolve(true);
       img.onerror = () => resolve(false);
       img.src = url;
     });
-    if (ok) {
-      playerPhotoCache.set(name, url);
-      return url;
-    }
+    return ok ? url : tryExt(i + 1);
+  };
+  return tryExt(0);
+}
+
+function getPlayerPhotoUrl(name) {
+  if (!playerPhotoLookups.has(name)) {
+    playerPhotoLookups.set(name, probePlayerPhoto(name));
   }
-  playerPhotoCache.set(name, null);
-  return null;
+  return playerPhotoLookups.get(name);
+}
+
+function attachTierChipPhotos(root) {
+  if (!root) return;
+  root.querySelectorAll(".tier-chip").forEach((chip) => {
+    const player = state.players.find((item) => item.id === chip.dataset.playerId);
+    const box = chip.querySelector(".tier-chip-photo");
+    const img = box ? box.querySelector("img") : null;
+    if (!player || !box || !img) return;
+
+    getPlayerPhotoUrl(player.name).then((url) => {
+      if (!chip.isConnected) return; // карточку уже перерисовали
+      if (url) {
+        img.src = url;
+        img.alt = player.name;
+        box.classList.add("has-photo");
+      } else {
+        box.classList.remove("has-photo");
+      }
+    });
+  });
 }
 
 function setupTierPhotoPreview() {
-  const container = els.viewTierlist;
-  if (!container || !els.tierPhotoPreview || !els.tierPhotoPreviewImg) return;
-
-  container.addEventListener("mouseover", (event) => {
-    const chip = event.target.closest(".tier-chip");
-    if (!chip || !container.contains(chip)) return;
-    if (chip.dataset.playerId === tierPhotoHoveredId) return;
-    tierPhotoHoveredId = chip.dataset.playerId;
-    showTierPhotoPreview(chip);
-  });
-
-  container.addEventListener("mouseout", (event) => {
-    const chip = event.target.closest(".tier-chip");
-    if (!chip) return;
-    const related = event.relatedTarget;
-    if (related && chip.contains(related)) return;
-    tierPhotoHoveredId = null;
-    hideTierPhotoPreview();
-  });
-
-  window.addEventListener("scroll", hideTierPhotoPreview, true);
-  window.addEventListener("resize", hideTierPhotoPreview);
-
   window.addEventListener("keydown", (event) => {
-    if (event.key.toLowerCase() !== "f" || event.ctrlKey || event.metaKey || event.altKey) return;
+    // event.code — это физическая клавиша на клавиатуре, не зависит от раскладки
+    // (работает и на RU, и на UA, и на любой другой раскладке).
+    if (event.code !== "KeyF" || event.ctrlKey || event.metaKey || event.altKey) return;
     const active = document.activeElement;
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
     if (state.activeView !== "tierlist") return;
 
     state.tierPhotoPreviewEnabled = !state.tierPhotoPreviewEnabled;
-    if (!state.tierPhotoPreviewEnabled) {
-      hideTierPhotoPreview();
-    } else if (tierPhotoHoveredId) {
-      const chip = container.querySelector(`.tier-chip[data-player-id="${CSS.escape(tierPhotoHoveredId)}"]`);
-      if (chip) showTierPhotoPreview(chip);
-    }
+    document.body.classList.toggle("tier-photos-off", !state.tierPhotoPreviewEnabled);
   });
-}
-
-async function showTierPhotoPreview(chip) {
-  if (!state.tierPhotoPreviewEnabled) return;
-  const playerId = chip.dataset.playerId;
-  const player = state.players.find((item) => item.id === playerId);
-  if (!player) return;
-
-  const token = ++tierPhotoRequestToken;
-  const url = await findPlayerPhotoUrl(player.name);
-  if (token !== tierPhotoRequestToken) return; // навели на другого игрока, пока грузилось
-  if (tierPhotoHoveredId !== playerId) return;
-  if (!url) {
-    hideTierPhotoPreview();
-    return;
-  }
-
-  els.tierPhotoPreviewImg.src = url;
-  els.tierPhotoPreviewImg.alt = player.name;
-  els.tierPhotoPreview.hidden = false;
-  positionTierPhotoPreview(chip);
-}
-
-function hideTierPhotoPreview() {
-  if (els.tierPhotoPreview) els.tierPhotoPreview.hidden = true;
-}
-
-function positionTierPhotoPreview(chip) {
-  const preview = els.tierPhotoPreview;
-  if (!preview) return;
-  const margin = 10;
-  const chipRect = chip.getBoundingClientRect();
-  const previewRect = preview.getBoundingClientRect();
-
-  let top = chipRect.top - previewRect.height - margin;
-  if (top < margin) {
-    top = chipRect.bottom + margin;
-  }
-  let left = chipRect.left + chipRect.width / 2 - previewRect.width / 2;
-  left = Math.max(margin, Math.min(left, window.innerWidth - previewRect.width - margin));
-
-  preview.style.left = `${left}px`;
-  preview.style.top = `${top}px`;
 }
 
 function bindTierFieldEvents() {

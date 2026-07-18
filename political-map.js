@@ -7,17 +7,20 @@ const SAVE_DEBOUNCE_MS = 900;
 const MAIN_BOARD_ID = "main";
 
 const TOOLS = [
-  { id: "hand", icon: "hand", label: "Рука", hotkey: "H" },
-  { id: "brush", icon: "pencil", label: "Кисть", hotkey: "B" },
-  { id: "eraser", icon: "eraser", label: "Ластик", hotkey: "E" },
-  { id: "rect", icon: "square", label: "Прямоугольник", hotkey: "R" },
-  { id: "ellipse", icon: "circle", label: "Круг", hotkey: "O" },
-  { id: "rounded", icon: "squircle", label: "Скруглённый", hotkey: "U" },
-  { id: "diamond", icon: "diamond", label: "Ромб", hotkey: "D" },
-  { id: "arrow", icon: "move-right", label: "Стрелка", hotkey: "A" },
-  { id: "drawArrow", icon: "spline", label: "Стрелка-кисть", hotkey: "Shift+A" },
-  { id: "pin", icon: "map-pin", label: "Точка", hotkey: "P" },
+  { id: "hand", icon: "hand", label: "Рука", hotkey: "H", code: "KeyH" },
+  { id: "brush", icon: "pencil", label: "Кисть", hotkey: "B", code: "KeyB" },
+  { id: "eraser", icon: "eraser", label: "Ластик", hotkey: "E", code: "KeyE" },
+  { id: "rect", icon: "square", label: "Прямоугольник", hotkey: "R", code: "KeyR" },
+  { id: "ellipse", icon: "circle", label: "Круг", hotkey: "O", code: "KeyO" },
+  { id: "rounded", icon: "squircle", label: "Скруглённый", hotkey: "U", code: "KeyU" },
+  { id: "diamond", icon: "diamond", label: "Ромб", hotkey: "D", code: "KeyD" },
+  { id: "arrow", icon: "move-right", label: "Стрелка", hotkey: "A", code: "KeyA" },
+  { id: "drawArrow", icon: "spline", label: "Стрелка-кисть", hotkey: "Shift+A", code: "KeyA" },
+  { id: "pin", icon: "map-pin", label: "Точка", hotkey: "P", code: "KeyP" },
 ];
+
+// Инструменты, у которых есть настраиваемая толщина — их можно менять зажатием ПКМ.
+const STROKE_SIZE_TOOLS = new Set(["brush", "eraser", "rect", "ellipse", "rounded", "diamond", "arrow", "drawArrow"]);
 
 let ctx = null;
 let saveTimer = null;
@@ -40,6 +43,9 @@ const mapState = {
   imageLoaded: false,
   isPanning: false,
   isDrawing: false,
+  isResizingStroke: false,
+  resizeStartX: 0,
+  resizeStartWidth: 3,
   panStart: null,
   pointerDownScreen: null,
   pointerStart: null,
@@ -354,6 +360,65 @@ function closeMarkerPopup() {
   }, 180);
 }
 
+// Клики/наведения внутри плавающих окошек (карточка города, точки, редактор города)
+// не должны запускать панорамирование/рисование карты — иначе кнопки внутри них
+// (например «Сохранить») не срабатывают, потому что viewport перехватывает указатель.
+function isInsideFloatingPanel(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return !!(
+    target.closest(".polmap-city-popup") ||
+    target.closest(".polmap-marker-popup") ||
+    target.closest(".polmap-city-edit-panel")
+  );
+}
+
+// Простое перетаскивание плавающих окошек за «шапку», как у настоящего окна.
+function makeFloatingPanelDraggable(panel) {
+  if (!panel) return;
+  const handle = panel.querySelector(".polmap-city-popup-head");
+  if (!handle) return;
+  handle.classList.add("is-draggable");
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const viewportRect = els.viewport.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = panelRect.left - viewportRect.left;
+    const startTop = panelRect.top - viewportRect.top;
+    const margin = 8;
+
+    handle.classList.add("is-dragging");
+    handle.setPointerCapture(event.pointerId);
+
+    function onMove(moveEvent) {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      const maxLeft = Math.max(margin, viewportRect.width - panelRect.width - margin);
+      const maxTop = Math.max(margin, viewportRect.height - panelRect.height - margin);
+      panel.style.left = `${clamp(startLeft + dx, margin, maxLeft)}px`;
+      panel.style.top = `${clamp(startTop + dy, margin, maxTop)}px`;
+    }
+
+    function onUp(upEvent) {
+      handle.classList.remove("is-dragging");
+      handle.releasePointerCapture(upEvent.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+    }
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  });
+}
+
 /* ================= Boards ================= */
 
 function renderBoardSelect() {
@@ -527,8 +592,16 @@ function bindMapEvents() {
     els.citiesLayer?.setAttribute("viewBox", "0 0 100 100");
   }
 
+  makeFloatingPanelDraggable(els.cityPopup);
+  makeFloatingPanelDraggable(els.markerPopup);
+  makeFloatingPanelDraggable(els.cityEditPanel);
+
   els.viewport?.addEventListener("wheel", onWheel, { passive: false });
   els.viewport?.addEventListener("pointerdown", onPointerDown);
+  els.viewport?.addEventListener("contextmenu", (event) => {
+    // ПКМ используется для изменения толщины кисти в режиме рисования — свой menu не нужен.
+    if (mapState.drawMode) event.preventDefault();
+  });
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
   window.addEventListener("pointercancel", onPointerUp);
@@ -588,6 +661,10 @@ function bindMapEvents() {
 
   els.cityEditPanel?.querySelector('[data-action="save"]')?.addEventListener("click", saveCityEdit);
   els.cityEditPanel?.querySelector('[data-action="reset"]')?.addEventListener("click", resetCityEdit);
+  els.cityEditPanel?.querySelector('[data-action="show-players"]')?.addEventListener("click", (event) => {
+    if (!mapState.editingCityId) return;
+    openCityPopup(mapState.editingCityId, event.clientX, event.clientY);
+  });
   els.cityEditPanel?.querySelector('[data-action="close"]')?.addEventListener("click", () => {
     closeCityEditPanel();
     mapState.editingCityId = null;
@@ -681,6 +758,18 @@ function renderToolbar() {
 
 function onKeyDown(event) {
   if (!els.view || els.view.hidden) return;
+
+  if (event.key === "Escape") {
+    if (els.cityPopup && !els.cityPopup.hidden) closeCityPopup();
+    if (els.markerPopup && !els.markerPopup.hidden) closeMarkerPopup();
+    if (els.cityEditPanel && !els.cityEditPanel.hidden) {
+      closeCityEditPanel();
+      mapState.editingCityId = null;
+      mapState.editingRegion = null;
+      els.citiesLayer?.querySelectorAll(".polmap-vertex-handles").forEach((g) => (g.innerHTML = ""));
+    }
+  }
+
   if (event.target.matches("input, textarea, select, [contenteditable='true']")) return;
 
   if (event.code === "Space") {
@@ -690,20 +779,21 @@ function onKeyDown(event) {
 
   if (!mapState.canEdit || !mapState.drawMode) return;
 
-  const key = event.key.toLowerCase();
-  if (event.shiftKey && key === "a") {
+  // event.code отражает физическую клавишу независимо от раскладки (RU/EN и т.д.),
+  // в отличие от event.key, который на русской раскладке даёт кириллицу.
+  if (event.shiftKey && event.code === "KeyA") {
     event.preventDefault();
     selectTool("drawArrow");
     return;
   }
 
-  const tool = TOOLS.find((item) => item.hotkey.toLowerCase() === key);
+  const tool = TOOLS.find((item) => item.code === event.code && item.id !== "drawArrow");
   if (tool) {
     event.preventDefault();
     selectTool(tool.id);
   }
 
-  if ((event.ctrlKey || event.metaKey) && key === "z") {
+  if ((event.ctrlKey || event.metaKey) && event.code === "KeyZ") {
     event.preventDefault();
     mapState.elements.pop();
     render();
@@ -729,8 +819,20 @@ function onWheel(event) {
 }
 
 function onPointerDown(event) {
-  if (event.button !== 0 && event.button !== 1) return;
   if (!els.viewport?.contains(event.target)) return;
+  if (isInsideFloatingPanel(event.target)) return;
+
+  if (event.button === 2) {
+    // ПКМ + перетаскивание в сторону — меняем толщину кисти/фигуры, как в графических редакторах.
+    if (!mapState.canEdit || !mapState.drawMode || !STROKE_SIZE_TOOLS.has(mapState.tool)) return;
+    mapState.isResizingStroke = true;
+    mapState.resizeStartX = event.clientX;
+    mapState.resizeStartWidth = mapState.strokeWidth;
+    els.viewport.setPointerCapture(event.pointerId);
+    return;
+  }
+
+  if (event.button !== 0 && event.button !== 1) return;
 
   if (mapState.editCitiesMode) {
     const handle = event.target.closest(".polmap-vertex-handle");
@@ -786,6 +888,17 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
+  if (mapState.isResizingStroke) {
+    const dx = event.clientX - mapState.resizeStartX;
+    const next = clamp(Math.round(mapState.resizeStartWidth + dx / 4), 1, 16);
+    if (next !== mapState.strokeWidth) {
+      mapState.strokeWidth = next;
+      if (els.strokeInput) els.strokeInput.value = String(next);
+      if (els.strokeValue) els.strokeValue.textContent = String(next);
+    }
+    return;
+  }
+
   if (mapState.draggingVertexIndex !== null && mapState.editingRegion) {
     const point = citiesLayerPointFromEvent(event);
     mapState.editingRegion[mapState.draggingVertexIndex] = [point.x, point.y];
@@ -833,6 +946,11 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  if (mapState.isResizingStroke) {
+    mapState.isResizingStroke = false;
+    return;
+  }
+
   if (mapState.draggingVertexIndex !== null) {
     mapState.draggingVertexIndex = null;
     return;
