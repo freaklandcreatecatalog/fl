@@ -197,6 +197,7 @@ const els = {
   votingHint: document.querySelector("#votingHint"),
   votingHeads: document.querySelector("#votingHeads"),
   votingSubmitButton: document.querySelector("#votingSubmitButton"),
+  votingSkipButton: document.querySelector("#votingSkipButton"),
 
   tabCatalog: document.querySelector("#tabCatalog"),
   tabTierlist: document.querySelector("#tabTierlist"),
@@ -253,6 +254,7 @@ const els = {
   polmapNewBoardButton: document.querySelector("#polmapNewBoardButton"),
   polmapDeleteBoardButton: document.querySelector("#polmapDeleteBoardButton"),
   polmapEditCitiesToggle: document.querySelector("#polmapEditCitiesToggle"),
+  polmapExportButton: document.querySelector("#polmapExportButton"),
   polmapCityEditPanel: document.querySelector("#polmapCityEditPanel"),
   polmapMarkersLayer: document.querySelector("#polmapMarkersLayer"),
   polmapMarkerPopup: document.querySelector("#polmapMarkerPopup"),
@@ -450,6 +452,7 @@ function initPoliticalMapModule() {
       deleteBoardButton: els.polmapDeleteBoardButton,
       editCitiesToggle: els.polmapEditCitiesToggle,
       cityEditPanel: els.polmapCityEditPanel,
+      exportButton: els.polmapExportButton,
     },
     getPlayers: () => state.players,
     onPlayerOpen: (playerId) => openPlayerFromMap(playerId),
@@ -737,8 +740,12 @@ async function ensureVotingRound(force = false) {
 
       let candidates = eligible.filter((player) => !usedPool.includes(player.id));
       if (candidates.length === 0) {
+        // Пул закончился — начинаем новый круг, но стараемся не повторять
+        // прошлый раунд сразу же (только если игроков достаточно для этого).
         usedPool = [];
-        candidates = eligible.slice();
+        const previousRoundIds = Array.isArray(data.playerIds) ? data.playerIds : [];
+        const withoutPrevious = eligible.filter((player) => !previousRoundIds.includes(player.id));
+        candidates = withoutPrevious.length >= Math.min(VOTE_ROUND_SIZE, eligible.length) ? withoutPrevious : eligible.slice();
       }
 
       const count = Math.min(VOTE_ROUND_SIZE, candidates.length);
@@ -894,6 +901,16 @@ async function submitVote() {
   }
 }
 
+// Для тех, кто не хочет оценивать в этом раунде — просто прячем виджет
+// до следующей смены раунда, без отправки голосов.
+function skipVote() {
+  const roundStartAt = state.voting.roundStartAt;
+  if (roundStartAt === null) return;
+  localStorage.setItem(VOTE_LOCAL_KEY, String(roundStartAt));
+  state.votingSelection = { favorites: [], unfavorites: [] };
+  renderVotingWidget();
+}
+
 /* ================= Voting admin tab ================= */
 
 function renderVotingAdminGrid() {
@@ -1027,6 +1044,9 @@ function bindEvents() {
 
   if (els.votingSubmitButton) {
     els.votingSubmitButton.addEventListener("click", submitVote);
+  }
+  if (els.votingSkipButton) {
+    els.votingSkipButton.addEventListener("click", skipVote);
   }
 
   els.themeToggle.addEventListener("click", () => {

@@ -1798,45 +1798,6 @@ body.is-polmap-view .shell {
   }
 }
 
-.polmap-city-tag {
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 200ms ease;
-}
-
-.polmap-viewport:not(.is-draw-mode) .polmap-city-group:hover .polmap-city-tag {
-  opacity: 1;
-}
-
-.polmap-city-tag-inner {
-  transform: translateY(-3.4px) scale(0.9);
-  transform-origin: center;
-  transform-box: fill-box;
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.polmap-viewport:not(.is-draw-mode) .polmap-city-group:hover .polmap-city-tag-inner {
-  transform: translateY(-4.6px) scale(1);
-}
-
-.polmap-city-tag-bg {
-  fill: color-mix(in srgb, var(--city-color) 88%, black 6%);
-  stroke: rgba(255, 255, 255, 0.35);
-  stroke-width: 0.08;
-}
-
-.polmap-city-tag-text {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.7px;
-  fill: #fff;
-  text-anchor: middle;
-  dominant-baseline: middle;
-  paint-order: stroke;
-  stroke: rgba(0, 0, 0, 0.25);
-  stroke-width: 0.03;
-}
-
 .polmap-city-pulse {
   fill: var(--city-color);
   opacity: 0;
@@ -2137,57 +2098,90 @@ body.is-polmap-view .shell {
   height: 12px;
 }
 
-/* ---------- Voting widget (bottom bar) ---------- */
+/* ---------- Voting widget (centered modal, blurred backdrop) ---------- */
 .voting-bar {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 55;
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  border-top: 1px solid var(--line);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(8, 8, 12, 0.58);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  animation: votingBackdropIn 260ms ease both;
+}
+
+.voting-bar[hidden] {
+  display: none;
+}
+
+@keyframes votingBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .voting-bar-inner {
-  max-width: 1100px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 620px;
+  max-height: min(88vh, 720px);
+  overflow-y: auto;
   display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  padding: 26px 26px calc(22px + env(safe-area-inset-bottom, 0px));
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4), 0 4px 18px rgba(0, 0, 0, 0.25);
+  animation: votingModalIn 340ms cubic-bezier(0.2, 0.9, 0.24, 1.08) both;
+}
+
+@keyframes votingModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .voting-info {
-  flex: none;
-  width: 240px;
-  min-width: 240px;
+  text-align: center;
 }
 
 .voting-title {
   font-family: var(--font-display);
-  font-size: 14.5px;
+  font-size: 19px;
   font-weight: 700;
   line-height: 1.25;
-  min-height: 36px;
+  min-height: 26px;
+  justify-content: center;
   display: flex;
   align-items: center;
 }
 
 .voting-hint {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  margin-top: 2px;
-  min-height: 15px;
+  margin-top: 4px;
+  min-height: 16px;
+  text-align: center;
 }
 
 .voting-heads {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 10px;
-  overflow-x: auto;
-  flex: 1 1 auto;
   padding: 4px 2px;
 }
 
@@ -2197,11 +2191,11 @@ body.is-polmap-view .shell {
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  width: 62px;
-  padding: 6px 4px;
+  width: 76px;
+  padding: 8px 6px;
   border-radius: 14px;
   border: 2px solid transparent;
-  background: transparent;
+  background: var(--surface-soft);
   transition: transform var(--speed) ease, border-color var(--speed) ease, background var(--speed) ease;
 }
 
@@ -2210,8 +2204,8 @@ body.is-polmap-view .shell {
 }
 
 .voting-head-avatar {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: 10px;
   overflow: hidden;
   display: grid;
@@ -2227,9 +2221,9 @@ body.is-polmap-view .shell {
 }
 
 .voting-head-name {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
-  max-width: 60px;
+  max-width: 70px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2245,24 +2239,35 @@ body.is-polmap-view .shell {
   background: rgba(229, 72, 77, 0.14);
 }
 
-#votingSubmitButton {
-  flex: none;
+.voting-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.voting-actions .secondary-button,
+.voting-actions .primary-button {
+  flex: 1 1 160px;
+  justify-content: center;
 }
 
 @media (max-width: 640px) {
+  .voting-bar {
+    padding: 12px;
+  }
   .voting-bar-inner {
+    padding: 20px 18px calc(18px + env(safe-area-inset-bottom, 0px));
+    border-radius: 18px;
+  }
+  .voting-actions {
     flex-direction: column;
     align-items: stretch;
   }
-  .voting-info {
-    width: 100%;
-  }
-  .voting-heads {
-    order: 2;
-  }
-  #votingSubmitButton {
-    order: 3;
-    justify-content: center;
+  .voting-actions .secondary-button,
+  .voting-actions .primary-button {
+    flex: none;
   }
 }
 

@@ -5,6 +5,12 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 4;
 const SAVE_DEBOUNCE_MS = 900;
 const MAIN_BOARD_ID = "main";
+// Сколько пикселей нужно реально сдвинуть мышь/палец, прежде чем считать это
+// перетаскиванием карты, а не кликом. Без этого порога любое мельчайшее
+// дрожание руки при клике на город сдвигало карту на пиксель-другой, из-за
+// чего к моменту отпускания кнопки курсор оказывался уже не над городом —
+// и клик "не срабатывал".
+const PAN_DRAG_THRESHOLD = 5;
 
 const TOOLS = [
   { id: "hand", icon: "hand", label: "Рука", hotkey: "H", code: "KeyH" },
@@ -42,6 +48,8 @@ const mapState = {
   imageNatural: { w: 1200, h: 800 },
   imageLoaded: false,
   isPanning: false,
+  panPending: false,
+  pendingPointerId: null,
   isDrawing: false,
   isResizingStroke: false,
   resizeStartX: 0,
@@ -206,6 +214,16 @@ function applyCityFocus(cityId) {
     els.stage?.classList.remove("is-flying");
   }, 700);
   highlightCityRegion(cityId);
+
+  // Раньше тут карта только приближалась к городу, а список игроков не
+  // открывался — приходилось кликать по городу второй раз. Показываем
+  // попап сразу после долёта, по центру области просмотра (мы же сами
+  // туда её и подвинули выше).
+  window.setTimeout(() => {
+    if (!els.viewport) return;
+    const rect = els.viewport.getBoundingClientRect();
+    openCityPopup(cityId, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }, 720);
 }
 
 function highlightCityRegion(cityId) {
@@ -219,7 +237,7 @@ function highlightCityRegion(cityId) {
   }, 2400);
 }
 
-/* ================= City overlay (polygons, tags, population) ================= */
+/* ================= City overlay (polygons, population) ================= */
 
 function buildCityOverlay() {
   if (!els.citiesLayer) return;
@@ -230,41 +248,125 @@ function buildCityOverlay() {
     return `
       <g class="polmap-city-group" data-city-id="${city.id}" style="--city-color:${color}">
         <polygon class="polmap-city-hit${DEBUG_CITY_OUTLINES ? " is-debug" : ""}" data-city-id="${city.id}" points="${points}" vector-effect="non-scaling-stroke"/>
-        <g class="polmap-city-tag" style="transform: translate(${center.x}px, ${center.y}px)">
-          <g class="polmap-city-tag-inner">
-            <rect class="polmap-city-tag-bg" x="-1" y="-1.6" rx="1.6" ry="1.6" height="3.2"></rect>
-            <text class="polmap-city-tag-text" y="0.03">${escapeXml(city.name)}</text>
-          </g>
-        </g>
         <circle class="polmap-city-pulse" cx="${center.x}" cy="${center.y}" r="0.9"></circle>
         <g class="polmap-vertex-handles" data-city-id="${city.id}"></g>
       </g>`;
   }).join("");
 
-  els.citiesLayer.querySelectorAll(".polmap-city-tag-text").forEach((node) => {
-    const len = node.getComputedTextLength ? safeTextLength(node) : node.textContent.length * 1.6;
-    const width = len + 2.4;
-    const rect = node.previousElementSibling;
-    if (rect) {
-      rect.setAttribute("width", width.toFixed(2));
-      rect.setAttribute("x", (-width / 2).toFixed(2));
-    }
-  });
-
   updateCityPopulation();
   if (mapState.editCitiesMode && mapState.editingCityId) renderVertexHandles();
 }
 
-function safeTextLength(node) {
-  try {
-    return node.getComputedTextLength();
-  } catch {
-    return node.textContent.length * 1.6;
-  }
-}
-
 export function updatePoliticalMapPopulation() {
   updateCityPopulation();
+}
+
+/* ================= PNG export ================= */
+
+function hexToRgba(hex, alpha) {
+  const fallback = `rgba(77, 171, 247, ${alpha})`;
+  if (typeof hex !== "string" || !hex.startsWith("#")) return fallback;
+  const clean = hex.slice(1);
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  const num = Number.parseInt(full, 16);
+  if (Number.isNaN(num)) return fallback;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function slugifyFileName(name) {
+  return (name || "karta")
+    .trim()
+    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "") || "karta";
+}
+
+export function exportPoliticalMapAsPng() {
+  const { w, h } = mapState.imageNatural;
+  if (!w || !h) return false;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const c2d = canvas.getContext("2d");
+  if (!c2d) return false;
+
+  c2d.fillStyle = "#0b0b10";
+  c2d.fillRect(0, 0, w, h);
+
+  if (els.mapImage && els.mapImage.complete && els.mapImage.naturalWidth) {
+    c2d.drawImage(els.mapImage, 0, 0, w, h);
+  }
+
+  // Рисунки (кисть/фигуры/стрелки) — сам канвас уже в натуральном разрешении карты
+  if (els.canvas) {
+    c2d.drawImage(els.canvas, 0, 0, w, h);
+  }
+
+  // Границы городов — только на основной карте (названия не дублируем: они уже есть на самой картинке)
+  if (mapState.isMainBoard) {
+    CITIES.forEach((city) => {
+      const points = city.region.map(([x, y]) => [(x / 100) * w, (y / 100) * h]);
+      if (points.length < 3) return;
+
+      c2d.beginPath();
+      points.forEach(([px, py], index) => {
+        if (index === 0) c2d.moveTo(px, py);
+        else c2d.lineTo(px, py);
+      });
+      c2d.closePath();
+      c2d.fillStyle = hexToRgba(city.color, 0.2);
+      c2d.fill();
+      c2d.strokeStyle = city.color || "#4dabf7";
+      c2d.lineWidth = Math.max(2, w * 0.0018);
+      c2d.stroke();
+    });
+  }
+
+  // Метки (пины админов)
+  mapState.markers.forEach((marker) => {
+    const r = Math.max(7, w * 0.005);
+    const color = marker.color || "#e8590c";
+    c2d.beginPath();
+    c2d.arc(marker.x, marker.y, r, 0, Math.PI * 2);
+    c2d.fillStyle = color;
+    c2d.fill();
+    c2d.lineWidth = Math.max(2, r * 0.4);
+    c2d.strokeStyle = "#ffffff";
+    c2d.stroke();
+
+    const fontSize = Math.max(13, Math.round(w * 0.011));
+    c2d.font = `700 ${fontSize}px "Manrope", "Segoe UI", sans-serif`;
+    c2d.textAlign = "center";
+    c2d.textBaseline = "alphabetic";
+    const label = marker.label || "Точка";
+    const ty = marker.y - r - 6;
+    c2d.lineWidth = 3;
+    c2d.strokeStyle = "rgba(255, 255, 255, 0.85)";
+    c2d.strokeText(label, marker.x, ty);
+    c2d.fillStyle = "#1a1a1a";
+    c2d.fillText(label, marker.x, ty);
+  });
+
+  const board = mapState.boards.find((b) => b.id === mapState.boardId);
+  const fileName = `${slugifyFileName(board ? board.name : "politicheskaya-karta")}.png`;
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }, "image/png");
+
+  return true;
 }
 
 function updateCityPopulation() {
@@ -659,6 +761,11 @@ function bindMapEvents() {
   els.newBoardButton?.addEventListener("click", handleCreateBoard);
   els.deleteBoardButton?.addEventListener("click", handleDeleteBoard);
 
+  els.exportButton?.addEventListener("click", () => {
+    const ok = exportPoliticalMapAsPng();
+    if (!ok) alert("Карта ещё не загрузилась, подожди секунду и попробуй снова.");
+  });
+
   els.cityEditPanel?.querySelector('[data-action="save"]')?.addEventListener("click", saveCityEdit);
   els.cityEditPanel?.querySelector('[data-action="reset"]')?.addEventListener("click", resetCityEdit);
   els.cityEditPanel?.querySelector('[data-action="show-players"]')?.addEventListener("click", (event) => {
@@ -849,9 +956,15 @@ function onPointerDown(event) {
 
   if (useHand) {
     mapState.isPanning = true;
+    mapState.panPending = true;
     mapState.panStart = { x: event.clientX - mapState.panX, y: event.clientY - mapState.panY };
     mapState.pointerDownScreen = { x: event.clientX, y: event.clientY };
-    els.viewport.setPointerCapture(event.pointerId);
+    mapState.pendingPointerId = event.pointerId;
+    // Указатель НЕ захватываем сразу: pointer capture ретаргетит все
+    // последующие pointermove/pointerup на viewport, и в паре браузеров это
+    // мешает нормальному клику по городу под курсором. Настоящий захват
+    // ставим в onPointerMove, только когда сдвиг реально превысит порог
+    // и мы окончательно решили, что это перетаскивание, а не клик.
     return;
   }
 
@@ -914,6 +1027,17 @@ function onPointerMove(event) {
   }
 
   if (mapState.isPanning && mapState.panStart) {
+    if (mapState.panPending) {
+      const moved = mapState.pointerDownScreen
+        ? distance([mapState.pointerDownScreen.x, mapState.pointerDownScreen.y], [event.clientX, event.clientY])
+        : 0;
+      if (moved < PAN_DRAG_THRESHOLD) return; // ещё похоже на клик — карту не двигаем и указатель не захватываем
+      mapState.panPending = false;
+      if (mapState.pendingPointerId !== null) {
+        els.viewport?.setPointerCapture(mapState.pendingPointerId);
+        mapState.pendingPointerId = null;
+      }
+    }
     mapState.panX = event.clientX - mapState.panStart.x;
     mapState.panY = event.clientY - mapState.panStart.y;
     applyTransform();
@@ -960,6 +1084,8 @@ function onPointerUp(event) {
     mapState.isPanning = false;
     mapState.panStart = null;
     mapState.pointerDownScreen = null;
+    mapState.panPending = false;
+    mapState.pendingPointerId = null;
     return;
   }
 

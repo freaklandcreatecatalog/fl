@@ -296,6 +296,11 @@
               <span>Редактировать города</span>
             </button>
 
+            <button class="secondary-button" id="polmapExportButton" type="button">
+              <i data-lucide="image-down" aria-hidden="true"></i>
+              <span>Экспорт PNG</span>
+            </button>
+
             <p class="polmap-hotkeys">
               <span>H</span> рука · <span>B</span> кисть · <span>E</span> ластик · <span>R/O/U/D</span> фигуры · <span>A</span> стрелка · <span>P</span> точка · колёсико — зум
             </p>
@@ -537,10 +542,16 @@
           <p class="voting-hint" id="votingHint">Любимые: 0/3 · Нелюбимые: 0/3</p>
         </div>
         <div class="voting-heads" id="votingHeads"></div>
-        <button class="primary-button" id="votingSubmitButton" type="button" disabled>
-          <i data-lucide="send" aria-hidden="true"></i>
-          <span>Отправить</span>
-        </button>
+        <div class="voting-actions">
+          <button class="secondary-button" id="votingSkipButton" type="button">
+            <i data-lucide="x" aria-hidden="true"></i>
+            <span>Пропустить</span>
+          </button>
+          <button class="primary-button" id="votingSubmitButton" type="button" disabled>
+            <i data-lucide="send" aria-hidden="true"></i>
+            <span>Отправить</span>
+          </button>
+        </div>
       </div>
     </div>
 
