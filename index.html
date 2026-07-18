@@ -445,7 +445,7 @@
 
     <!-- ADMINS MODAL -->
     <div class="modal-backdrop" id="adminsModalBackdrop" hidden>
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adminsModalTitle">
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="adminsModalTitle">
         <div class="modal-head">
           <h2 id="adminsModalTitle">Управление админами</h2>
           <button class="icon-button quiet" id="closeAdminsModal" type="button" aria-label="Закрыть">
@@ -455,21 +455,62 @@
 
         <ul class="admins-list" id="adminsList"></ul>
 
+        <div class="admin-add-tabs" id="adminAddTabs">
+          <button type="button" class="admin-add-tab is-active" data-mode="existing">Выдать существующему</button>
+          <button type="button" class="admin-add-tab" data-mode="new">Создать нового</button>
+        </div>
+
         <form id="addAdminForm" class="modal-form">
           <label>
-            <span>Логин нового админа</span>
+            <span id="newAdminNameLabel">Ник игрока</span>
             <input id="newAdminName" type="text" required autocomplete="off" />
           </label>
-          <label>
-            <span>Пароль</span>
-            <input id="newAdminPassword" type="password" required autocomplete="new-password" />
+          <label id="newAdminPasswordField" hidden>
+            <span>Пароль для нового аккаунта</span>
+            <input id="newAdminPassword" type="password" autocomplete="new-password" minlength="6" />
           </label>
+
+          <fieldset class="admin-permissions-field">
+            <legend>Что ему можно</legend>
+            <label class="permission-check">
+              <input type="checkbox" id="permPlayers" checked />
+              <span>Каталог игроков — добавлять, редактировать, удалять</span>
+            </label>
+            <label class="permission-check">
+              <input type="checkbox" id="permMap" checked />
+              <span>Полит. карта — рисовать, редактировать города</span>
+            </label>
+            <label class="permission-check">
+              <input type="checkbox" id="permVoting" checked />
+              <span>Голосование — вкладка со статистикой, запуск раунда без таймера</span>
+            </label>
+          </fieldset>
+
           <p class="modal-error" id="addAdminError" hidden>Такой логин уже занят</p>
           <button class="primary-button full-width" type="submit">
             <i data-lucide="user-plus" aria-hidden="true"></i>
-            <span>Добавить админа</span>
+            <span id="addAdminSubmitLabel">Выдать права</span>
           </button>
         </form>
+      </div>
+    </div>
+
+    <!-- VOTING INFO MODAL -->
+    <div class="modal-backdrop" id="votingInfoModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="votingInfoModalTitle">
+        <div class="modal-head">
+          <h2 id="votingInfoModalTitle">Как работает голосование</h2>
+          <button class="icon-button quiet" id="closeVotingInfoModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="voting-info-text">
+          <p>Раз в 3 часа сайт сам берёт 10 случайных игроков из каталога (админов туда не зовёт) и показывает вот эту панель внизу.</p>
+          <p>Тебе нужно выбрать 3 самых любимых — они станут зелёными. Дальше выбери хотя бы одного самого нелюбимого (можно и больше трёх, тут без ограничений) — они станут красными. Нажал «Отправить» — голос засчитан, панель пропадёт до следующего раунда.</p>
+          <p>Голосовать можно даже без аккаунта — сайт запоминает по твоему устройству, что ты уже проголосовал в этой десятке. Один раунд — один голос.</p>
+          <p>Каждый, кого выбрали — и любимый, и нелюбимый — получает +1 балл, потому что вызвал у тебя эмоции. Кого не выбрали — тому ничего не капает. Игрок не попадёт в голосование второй раз, пока не пройдут через него все остальные, а когда пройдут все — по новой.</p>
+          <p>Баллы копятся и видны только админам — на карточке игрока в каталоге и в отдельной вкладке «Голосование» с графиками.</p>
+        </div>
       </div>
     </div>
 
@@ -537,6 +578,9 @@
     <!-- VOTING WIDGET -->
     <div class="voting-bar" id="votingBar" hidden>
       <div class="voting-bar-inner">
+        <button class="voting-info-button" id="votingInfoButton" type="button" aria-label="Как работает голосование">
+          <i data-lucide="info" aria-hidden="true"></i>
+        </button>
         <div class="voting-info">
           <p class="voting-title" id="votingTitle">Выбери 3 самых любимых</p>
           <p class="voting-hint" id="votingHint">Любимые: 0/3 · Нелюбимые: 0/3</p>

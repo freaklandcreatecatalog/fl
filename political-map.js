@@ -96,7 +96,7 @@ export function initPoliticalMap(options) {
   renderBoardSelect();
   bindMapEvents();
   resizeCanvas();
-  render();
+  scheduleRender();
 }
 
 function updateEditCitiesToggleVisibility() {
@@ -118,7 +118,7 @@ export function setPoliticalMapCanEdit(canEdit) {
 
 export function setPoliticalMapElements(elements) {
   mapState.elements = Array.isArray(elements) ? elements.map(cloneElement) : [];
-  render();
+  scheduleRender();
 }
 
 export function setPoliticalMapMarkers(markers) {
@@ -170,7 +170,7 @@ export function onPoliticalMapShow() {
     centerMapInViewport();
     mapState.mapInitialized = true;
   }
-  render();
+  scheduleRender();
   updateCityPopulation();
   if (pendingFocusCityId) {
     applyCityFocus(pendingFocusCityId);
@@ -682,7 +682,7 @@ function bindMapEvents() {
       centerMapInViewport();
       mapState.mapInitialized = true;
     }
-    render();
+    scheduleRender();
   });
 
   if (els.mapImage?.complete) {
@@ -741,7 +741,7 @@ function bindMapEvents() {
   els.undoButton?.addEventListener("click", () => {
     if (!mapState.canEdit || !mapState.drawMode) return;
     mapState.elements.pop();
-    render();
+    scheduleRender();
     scheduleSaveBoard();
   });
 
@@ -750,7 +750,7 @@ function bindMapEvents() {
     const ok = confirm("Очистить все рисунки на карте?");
     if (!ok) return;
     mapState.elements = [];
-    render();
+    scheduleRender();
     scheduleSaveBoard();
   });
 
@@ -903,7 +903,7 @@ function onKeyDown(event) {
   if ((event.ctrlKey || event.metaKey) && event.code === "KeyZ") {
     event.preventDefault();
     mapState.elements.pop();
-    render();
+    scheduleRender();
     scheduleSaveBoard();
   }
 }
@@ -987,7 +987,7 @@ function onPointerDown(event) {
     if (target) {
       mapState.eraserTargetId = target.id;
       target.opacity = 0.5;
-      render();
+      scheduleRender();
     }
     return;
   }
@@ -1001,6 +1001,17 @@ function onPointerDown(event) {
 }
 
 function onPointerMove(event) {
+  // Карта не на экране и ничего не тащим/не рисуем — не тратим время на каждое движение мыши по всему сайту.
+  if (
+    !mapState.isPanning &&
+    !mapState.isDrawing &&
+    !mapState.isResizingStroke &&
+    mapState.draggingVertexIndex === null &&
+    (!els.view || els.view.hidden)
+  ) {
+    return;
+  }
+
   if (mapState.isResizingStroke) {
     const dx = event.clientX - mapState.resizeStartX;
     const next = clamp(Math.round(mapState.resizeStartWidth + dx / 4), 1, 16);
@@ -1056,7 +1067,7 @@ function onPointerMove(event) {
     const last = points[points.length - 1];
     if (distance(last, [world.x, world.y]) > 1.5) {
       points.push([world.x, world.y]);
-      render();
+      scheduleRender();
     }
     return;
   }
@@ -1065,7 +1076,7 @@ function onPointerMove(event) {
 
   if (mapState.draft) {
     mapState.draft.points[1] = [world.x, world.y];
-    render();
+    scheduleRender();
   }
 }
 
@@ -1104,7 +1115,7 @@ function onPointerUp(event) {
     if (mapState.eraserTargetId) {
       mapState.elements = mapState.elements.filter((el) => el.id !== mapState.eraserTargetId);
       mapState.eraserTargetId = null;
-      render();
+      scheduleRender();
       scheduleSaveBoard();
     }
     return;
@@ -1128,7 +1139,7 @@ function onPointerUp(event) {
     }
   }
 
-  render();
+  scheduleRender();
 }
 
 function makeElement(type, points) {
@@ -1169,6 +1180,16 @@ function isPointNearElement(point, el, threshold) {
   }
 
   return distanceToSegment(point, a, b) <= threshold;
+}
+
+let renderScheduled = false;
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    render();
+  });
 }
 
 function render() {
@@ -1276,7 +1297,7 @@ function resizeCanvas() {
   els.stage.style.height = `${h}px`;
   if (els.markersLayer) els.markersLayer.setAttribute("viewBox", `0 0 ${w} ${h}`);
   ctx = els.canvas.getContext("2d");
-  render();
+  scheduleRender();
   renderMarkers();
 }
 

@@ -1,4 +1,4 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth,
   onAuthStateChanged,
@@ -61,6 +61,29 @@ function nicknameToEmail(nickname) {
   return `${nickname.trim().toLowerCase()}@${EMAIL_DOMAIN}`;
 }
 
+// Создаём новый аккаунт через отдельный (второй) экземпляр Firebase App —
+// иначе createUserWithEmailAndPassword переключил бы текущую сессию главного
+// админа на новый аккаунт. Через секунду после создания второй инстанс удаляется.
+async function createAdminAccount(nickname, password, permissions) {
+  const secondaryApp = initializeApp(firebaseConfig, `admin-create-${Date.now()}`);
+  const secondaryAuth = getAuth(secondaryApp);
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, nicknameToEmail(nickname), password);
+    const nicknameLower = nickname.trim().toLowerCase();
+    await setDoc(doc(db, "users", cred.user.uid), {
+      nickname: nickname.trim(),
+      nicknameLower,
+      isAdmin: true,
+      isMain: false,
+      permissions,
+      createdAt: Date.now(),
+    });
+    await signOut(secondaryAuth);
+  } finally {
+    await deleteApp(secondaryApp);
+  }
+}
+
 /* ================= Local-only storage ================= */
 const THEME_KEY = "freakland-create-theme";
 const LOG_MAX_ENTRIES = 300;
@@ -107,6 +130,7 @@ const state = {
   pendingPromptResolve: null,
   highlightPlayerId: null,
   activeView: "catalog",
+  adminAddMode: "existing",
   polmapMainData: { elements: [], markers: [] },
   polmapBoards: [],
   polmapActiveBoardId: "main",
@@ -121,6 +145,7 @@ let unsubVotingHistory = null;
 
 let unsubTierlists = null;
 let unsubActiveBoard = null;
+let iconsRafId = null;
 
 /* ================= DOM refs ================= */
 const els = {
@@ -176,9 +201,21 @@ const els = {
   adminsModal: document.querySelector("#adminsModalBackdrop"),
   closeAdminsModal: document.querySelector("#closeAdminsModal"),
   adminsList: document.querySelector("#adminsList"),
+  adminAddTabs: document.querySelector("#adminAddTabs"),
   addAdminForm: document.querySelector("#addAdminForm"),
   newAdminName: document.querySelector("#newAdminName"),
+  newAdminNameLabel: document.querySelector("#newAdminNameLabel"),
+  newAdminPasswordField: document.querySelector("#newAdminPasswordField"),
+  newAdminPassword: document.querySelector("#newAdminPassword"),
+  addAdminSubmitLabel: document.querySelector("#addAdminSubmitLabel"),
   addAdminError: document.querySelector("#addAdminError"),
+  permPlayers: document.querySelector("#permPlayers"),
+  permMap: document.querySelector("#permMap"),
+  permVoting: document.querySelector("#permVoting"),
+
+  votingInfoButton: document.querySelector("#votingInfoButton"),
+  votingInfoModal: document.querySelector("#votingInfoModalBackdrop"),
+  closeVotingInfoModal: document.querySelector("#closeVotingInfoModal"),
 
   openLogButton: document.querySelector("#openLogButton"),
   logModal: document.querySelector("#logModalBackdrop"),
@@ -373,7 +410,13 @@ async function init() {
       return;
     }
     const data = userSnap.data();
-    state.user = { uid: fbUser.uid, nickname: data.nickname, isAdmin: Boolean(data.isAdmin), isMain: Boolean(data.isMain) };
+    state.user = {
+      uid: fbUser.uid,
+      nickname: data.nickname,
+      isAdmin: Boolean(data.isAdmin),
+      isMain: Boolean(data.isMain),
+      permissions: data.permissions || null,
+    };
     subscribeTierlists(fbUser.uid);
     subscribeVotingHistory();
     updateAuthUI();
@@ -389,7 +432,7 @@ function subscribeVotingHistory() {
     unsubVotingHistory();
     unsubVotingHistory = null;
   }
-  if (!isAdmin()) return;
+  if (!canManageVoting()) return;
   const q = query(collection(db, "votingHistory"), orderBy("timestamp", "asc"), limit(500));
   unsubVotingHistory = onSnapshot(
     q,
@@ -462,7 +505,7 @@ function initPoliticalMapModule() {
     saveCityOverride: savePoliticalMapCityOverride,
     onBoardChange: switchPoliticalMapBoard,
     refreshIcons,
-    canEdit: isAdmin(),
+    canEdit: canManageMap(),
   });
 
   els.polmapCityPopupClose?.addEventListener("click", () => {
@@ -513,7 +556,7 @@ function decodePolmapElements(elements) {
 }
 
 async function savePoliticalMapBoardData(boardId, { elements, markers }) {
-  if (!isAdmin()) return;
+  if (!canManageMap()) return;
   try {
     const payload = { elements: encodePolmapElements(elements), markers };
     if (boardId === MAIN_BOARD_ID) {
@@ -528,7 +571,7 @@ async function savePoliticalMapBoardData(boardId, { elements, markers }) {
 }
 
 async function createPoliticalMapBoard(name) {
-  if (!isAdmin()) return null;
+  if (!canManageMap()) return null;
   try {
     const ref = await addDoc(collection(db, "politicalMapBoards"), {
       name,
@@ -545,7 +588,7 @@ async function createPoliticalMapBoard(name) {
 }
 
 async function deletePoliticalMapBoard(boardId) {
-  if (!isAdmin() || boardId === MAIN_BOARD_ID) return;
+  if (!canManageMap() || boardId === MAIN_BOARD_ID) return;
   try {
     await deleteDoc(doc(db, "politicalMapBoards", boardId));
   } catch (error) {
@@ -555,7 +598,7 @@ async function deletePoliticalMapBoard(boardId) {
 }
 
 async function savePoliticalMapCityOverride(cityId, patch) {
-  if (!isAdmin()) return;
+  if (!canManageMap()) return;
   const next = { ...state.polmapCityOverrides };
   if (patch) {
     // Убираем поля со значением undefined — Firestore не принимает undefined в документе.
@@ -640,6 +683,30 @@ function isMainAdmin() {
   return Boolean(state.user && state.user.isMain);
 }
 
+// Права обычного админа: главный админ (isMain) может всё всегда.
+// У остальных — то, что включил главный при выдаче прав (permissions),
+// а если поля вообще нет (старые админы, выданные до этой фичи) — считаем, что можно всё,
+// чтобы никому ничего не обрезало задним числом.
+function hasPermission(key) {
+  if (!state.user || !state.user.isAdmin) return false;
+  if (state.user.isMain) return true;
+  const perms = state.user.permissions;
+  if (!perms || typeof perms[key] === "undefined") return true;
+  return Boolean(perms[key]);
+}
+
+function canManagePlayers() {
+  return hasPermission("players");
+}
+
+function canManageMap() {
+  return hasPermission("map");
+}
+
+function canManageVoting() {
+  return hasPermission("voting");
+}
+
 function updateAuthUI() {
   const loggedIn = isLoggedIn();
   const admin = isAdmin();
@@ -648,9 +715,14 @@ function updateAuthUI() {
     node.hidden = !admin;
   });
 
-  if (!admin && state.activeView === "voting") {
+  // Точечные права поверх общего admin-only — обычный админ может не иметь доступа
+  // к какому-то конкретному разделу, если главный админ это отключил.
+  if (els.openForm) els.openForm.hidden = !canManagePlayers();
+  if (els.tabVoting) els.tabVoting.hidden = !canManageVoting();
+
+  if (!canManageVoting() && state.activeView === "voting") {
     switchView("catalog");
-  } else if (admin && state.activeView === "voting") {
+  } else if (canManageVoting() && state.activeView === "voting") {
     renderVotingAdminGrid();
   }
 
@@ -664,7 +736,7 @@ function updateAuthUI() {
   if (els.tierExportArea) els.tierExportArea.hidden = !loggedIn;
   if (els.tierPoolWrap) els.tierPoolWrap.hidden = !loggedIn;
 
-  setPoliticalMapCanEdit(admin);
+  setPoliticalMapCanEdit(canManageMap());
 
   let ratingOption = els.sortSelect ? els.sortSelect.querySelector('option[value="rating-desc"]') : null;
   if (els.sortSelect) {
@@ -719,7 +791,7 @@ async function ensureVotingRound(force = false) {
   const now = Date.now();
   if (!force) {
     if (state.voting.roundStartAt && now < state.voting.roundStartAt + VOTE_PERIOD_MS) return;
-  } else if (!isAdmin()) {
+  } else if (!canManageVoting()) {
     return;
   }
   if (!state.players.length) return;
@@ -781,7 +853,7 @@ async function ensureVotingRound(force = false) {
 }
 
 async function forceNewVotingRound() {
-  if (!isAdmin() || !els.forceVotingRoundButton) return;
+  if (!canManageVoting() || !els.forceVotingRoundButton) return;
   const ok = confirm("Начать новое голосование прямо сейчас? Текущая десятка сменится немедленно.");
   if (!ok) return;
 
@@ -914,7 +986,7 @@ function skipVote() {
 /* ================= Voting admin tab ================= */
 
 function renderVotingAdminGrid() {
-  if (!els.votingAdminGrid || !isAdmin()) return;
+  if (!els.votingAdminGrid || !canManageVoting()) return;
 
   const players = state.players.slice().sort((a, b) => {
     const totalA = ((state.voting.favScores || {})[a.id] || 0) + ((state.voting.unfavScores || {})[a.id] || 0);
@@ -1048,6 +1120,8 @@ function bindEvents() {
   if (els.votingSkipButton) {
     els.votingSkipButton.addEventListener("click", skipVote);
   }
+  els.votingInfoButton?.addEventListener("click", () => openModal(els.votingInfoModal));
+  els.closeVotingInfoModal?.addEventListener("click", () => closeModal(els.votingInfoModal));
 
   els.themeToggle.addEventListener("click", () => {
     const nextTheme = els.root.dataset.theme === "dark" ? "light" : "dark";
@@ -1060,7 +1134,7 @@ function bindEvents() {
 
   els.form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!isAdmin()) return;
+    if (!canManagePlayers()) return;
 
     const name = els.name.value.trim();
     const telegram = els.telegram.value.trim() ? normalizeSocialUrl(els.telegram.value.trim(), "t.me") : "";
@@ -1177,9 +1251,14 @@ function bindEvents() {
   els.openAdmins.addEventListener("click", async () => {
     if (!isMainAdmin()) return;
     await renderAdminsList();
+    setAdminAddMode("existing");
     openModal(els.adminsModal, els.newAdminName);
   });
   els.closeAdminsModal.addEventListener("click", () => closeModal(els.adminsModal));
+
+  els.adminAddTabs?.querySelectorAll("[data-mode]").forEach((button) => {
+    button.addEventListener("click", () => setAdminAddMode(button.dataset.mode));
+  });
 
   els.addAdminForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1189,21 +1268,56 @@ function bindEvents() {
 
     els.addAdminError.hidden = true;
     const nicknameLower = nickname.toLowerCase();
+    const permissions = {
+      players: Boolean(els.permPlayers?.checked),
+      map: Boolean(els.permMap?.checked),
+      voting: Boolean(els.permVoting?.checked),
+    };
+
+    if (state.adminAddMode === "new") {
+      const password = els.newAdminPassword.value;
+      if (!password || password.length < 6) {
+        els.addAdminError.textContent = "Пароль должен быть от 6 символов";
+        els.addAdminError.hidden = false;
+        return;
+      }
+      try {
+        const q = query(collection(db, "users"), where("nicknameLower", "==", nicknameLower));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          els.addAdminError.textContent = "Такой ник уже занят";
+          els.addAdminError.hidden = false;
+          return;
+        }
+        await createAdminAccount(nickname, password, permissions);
+        els.addAdminForm.reset();
+        await renderAdminsList();
+        logAction(`Создан новый админ: ${nickname}`);
+      } catch (error) {
+        console.error(error);
+        els.addAdminError.textContent =
+          error.code === "auth/weak-password" ? "Пароль слишком простой" : "Не получилось создать аккаунт";
+        els.addAdminError.hidden = false;
+      }
+      return;
+    }
 
     try {
       const q = query(collection(db, "users"), where("nicknameLower", "==", nicknameLower));
       const snap = await getDocs(q);
       if (snap.empty || snap.docs[0].data().isAdmin) {
+        els.addAdminError.textContent = snap.empty ? "Такого игрока нет — он ещё не регистрировался" : "Этот игрок уже админ";
         els.addAdminError.hidden = false;
         return;
       }
       const userDoc = snap.docs[0];
-      await updateDoc(doc(db, "users", userDoc.id), { isAdmin: true });
+      await updateDoc(doc(db, "users", userDoc.id), { isAdmin: true, permissions });
       els.addAdminForm.reset();
       await renderAdminsList();
       logAction(`Выдан админ: ${userDoc.data().nickname}`);
     } catch (error) {
       console.error(error);
+      els.addAdminError.textContent = "Что-то пошло не так, попробуй ещё раз";
       els.addAdminError.hidden = false;
     }
   });
@@ -1316,7 +1430,7 @@ function bindEvents() {
   els.exportTierlistButton.addEventListener("click", exportTierlistAsImage);
 
   // Generic modal close on backdrop click + escape
-  [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal].forEach((modal) => {
+  [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal, els.votingInfoModal].forEach((modal) => {
     modal?.addEventListener("click", (event) => {
       if (event.target === modal) closeModal(modal);
     });
@@ -1324,7 +1438,7 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal].forEach((modal) => {
+    [els.loginModal, els.adminsModal, els.logModal, els.nameModal, els.votingStatsModal, els.votingInfoModal].forEach((modal) => {
       if (modal && !modal.hidden) closeModal(modal);
     });
   });
@@ -1391,7 +1505,7 @@ function promptModal(title, defaultValue) {
 /* ================= Tabs ================= */
 
 function switchView(view) {
-  if (view === "voting" && !isAdmin()) view = "catalog";
+  if (view === "voting" && !canManageVoting()) view = "catalog";
   state.activeView = view;
   const isCatalog = view === "catalog";
   const isTierlist = view === "tierlist";
@@ -1446,7 +1560,7 @@ function renderCatalog() {
     } else {
       els.emptyTitle.textContent = "Игроков пока нет";
       els.emptyText.textContent = "Добавь первого участника Freakland Create через форму выше.";
-      els.emptyAdd.hidden = !isAdmin();
+      els.emptyAdd.hidden = !canManagePlayers();
     }
   }
 
@@ -1496,9 +1610,10 @@ function renderCatalog() {
 
 function playerCard(player) {
   const roleText = player.role || "";
-  const showRoleBadge = isAdmin() || Boolean(roleText);
+  const canEditPlayers = canManagePlayers();
+  const showRoleBadge = canEditPlayers || Boolean(roleText);
   const roleBadge = showRoleBadge
-    ? `<div class="role-badge-wrap"><span class="role-badge${isAdmin() ? " is-editable" : ""}${roleText ? "" : " is-empty"}" data-action="edit-role" data-id="${player.id}">${escapeHtml(roleText || "+ статус")}</span>${isAdmin() && roleText ? `<i class="role-delete" data-action="clear-role" data-id="${player.id}">✕</i>` : ""}</div>`
+    ? `<div class="role-badge-wrap"><span class="role-badge${canEditPlayers ? " is-editable" : ""}${roleText ? "" : " is-empty"}" data-action="edit-role" data-id="${player.id}">${escapeHtml(roleText || "+ статус")}</span>${canEditPlayers && roleText ? `<i class="role-delete" data-action="clear-role" data-id="${player.id}">✕</i>` : ""}</div>`
     : "";
 
   const voteScore = ((state.voting.favScores || {})[player.id] || 0) + ((state.voting.unfavScores || {})[player.id] || 0);
@@ -1515,7 +1630,7 @@ function playerCard(player) {
       : "",
   ].join("");
 
-  const adminButtons = isAdmin()
+  const adminButtons = canEditPlayers
     ? `
       <div class="card-actions">
         <button class="secondary-button" type="button" data-action="edit" data-id="${player.id}">
@@ -1614,7 +1729,7 @@ function disposeAllViewers() {
 }
 
 function editPlayer(id) {
-  if (!isAdmin()) return;
+  if (!canManagePlayers()) return;
   const player = state.players.find((item) => item.id === id);
   if (!player) return;
 
@@ -1631,7 +1746,7 @@ function editPlayer(id) {
 }
 
 async function editPlayerRole(id) {
-  if (!isAdmin()) return;
+  if (!canManagePlayers()) return;
   const player = state.players.find((item) => item.id === id);
   if (!player) return;
 
@@ -1648,7 +1763,7 @@ async function editPlayerRole(id) {
 }
 
 async function deletePlayer(id) {
-  if (!isAdmin()) return;
+  if (!canManagePlayers()) return;
   const player = state.players.find((item) => item.id === id);
   if (!player) return;
 
@@ -1664,7 +1779,7 @@ async function deletePlayer(id) {
 }
 
 function openForm() {
-  if (!isAdmin()) return;
+  if (!canManagePlayers()) return;
   els.formPanel.classList.add("is-open");
   els.formPanel.setAttribute("aria-hidden", "false");
 }
@@ -1711,6 +1826,25 @@ function formatCount(count) {
 
 /* ================= Admins list render ================= */
 
+function setAdminAddMode(mode) {
+  state.adminAddMode = mode;
+  els.adminAddTabs?.querySelectorAll("[data-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.mode === mode);
+  });
+  els.addAdminError.hidden = true;
+  if (mode === "new") {
+    if (els.newAdminNameLabel) els.newAdminNameLabel.textContent = "Ник нового админа";
+    if (els.newAdminPasswordField) els.newAdminPasswordField.hidden = false;
+    if (els.newAdminPassword) els.newAdminPassword.required = true;
+    if (els.addAdminSubmitLabel) els.addAdminSubmitLabel.textContent = "Создать аккаунт";
+  } else {
+    if (els.newAdminNameLabel) els.newAdminNameLabel.textContent = "Ник игрока";
+    if (els.newAdminPasswordField) els.newAdminPasswordField.hidden = true;
+    if (els.newAdminPassword) els.newAdminPassword.required = false;
+    if (els.addAdminSubmitLabel) els.addAdminSubmitLabel.textContent = "Выдать права";
+  }
+}
+
 async function renderAdminsList() {
   els.adminsList.innerHTML = `<li class="log-empty">Загрузка…</li>`;
   const q = query(collection(db, "users"), where("isAdmin", "==", true));
@@ -1718,13 +1852,31 @@ async function renderAdminsList() {
   const admins = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
 
   els.adminsList.innerHTML = admins
-    .map(
-      (admin) => `
-      <li class="admin-row">
-        <span>${escapeHtml(admin.nickname)}${admin.isMain ? '<span class="badge">гл. админ</span>' : ""}</span>
-        ${admin.isMain ? "" : `<button type="button" data-uid="${escapeAttr(admin.uid)}" data-nickname="${escapeAttr(admin.nickname)}" aria-label="Удалить админа"><i data-lucide="trash-2" aria-hidden="true"></i></button>`}
-      </li>`,
-    )
+    .map((admin) => {
+      if (admin.isMain) {
+        return `
+          <li class="admin-row">
+            <div class="admin-row-head">
+              <span>${escapeHtml(admin.nickname)}<span class="badge">гл. админ</span></span>
+            </div>
+          </li>`;
+      }
+      const perms = admin.permissions || { players: true, map: true, voting: true };
+      return `
+        <li class="admin-row">
+          <div class="admin-row-head">
+            <span>${escapeHtml(admin.nickname)}</span>
+            <button type="button" data-uid="${escapeAttr(admin.uid)}" data-nickname="${escapeAttr(admin.nickname)}" aria-label="Удалить админа">
+              <i data-lucide="trash-2" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="admin-row-perms" data-uid="${escapeAttr(admin.uid)}">
+            <label><input type="checkbox" data-perm="players" ${perms.players !== false ? "checked" : ""} /> Каталог</label>
+            <label><input type="checkbox" data-perm="map" ${perms.map !== false ? "checked" : ""} /> Карта</label>
+            <label><input type="checkbox" data-perm="voting" ${perms.voting !== false ? "checked" : ""} /> Голосование</label>
+          </div>
+        </li>`;
+    })
     .join("");
 
   els.adminsList.querySelectorAll("button[data-uid]").forEach((button) => {
@@ -1736,6 +1888,21 @@ async function renderAdminsList() {
       await updateDoc(doc(db, "users", uid), { isAdmin: false });
       logAction(`Убраны права админа: ${nickname}`);
       await renderAdminsList();
+    });
+  });
+
+  els.adminsList.querySelectorAll(".admin-row-perms").forEach((row) => {
+    row.querySelectorAll("input[data-perm]").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const uid = row.dataset.uid;
+        try {
+          await updateDoc(doc(db, "users", uid), { [`permissions.${input.dataset.perm}`]: input.checked });
+        } catch (error) {
+          console.error(error);
+          input.checked = !input.checked;
+          alert("Не получилось сохранить права.");
+        }
+      });
     });
   });
 
@@ -2134,9 +2301,15 @@ function updateThemeIcon() {
 }
 
 function refreshIcons() {
-  if (window.lucide) {
+  if (!window.lucide) return;
+  // lucide.createIcons() пересканирует весь документ — если за один тик кода
+  // его дёргают несколько раз (рендер каталога, карточек, виджета голосования и т.д.),
+  // схлопываем всё в один проход перед отрисовкой кадра.
+  if (iconsRafId) return;
+  iconsRafId = requestAnimationFrame(() => {
+    iconsRafId = null;
     window.lucide.createIcons();
-  }
+  });
 }
 
 /* ================= Escaping ================= */
