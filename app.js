@@ -431,6 +431,7 @@ async function init() {
   updateVotingCountdown();
   setInterval(updateVotingCountdown, 1000);
   setInterval(ensureVotingRound, 60 * 1000);
+  subscribeVotingHistory();
 
   // Основная карта (elements + markers) — публичное чтение
   onSnapshot(doc(db, "catalog", "politicalMap"), (snap) => {
@@ -472,10 +473,6 @@ async function init() {
         unsubTierlists();
         unsubTierlists = null;
       }
-      if (unsubVotingHistory) {
-        unsubVotingHistory();
-        unsubVotingHistory = null;
-      }
       if (unsubAdminMessage) {
         unsubAdminMessage();
         unsubAdminMessage = null;
@@ -483,7 +480,6 @@ async function init() {
       hideAdminMessageToast();
       state.tierlists = {};
       state.activeTierlist = "";
-      state.votingHistory = [];
       state.myVoteStatus = "guest";
       updateAuthUI();
       renderCatalog();
@@ -506,7 +502,6 @@ async function init() {
       permissions: data.permissions || null,
     };
     subscribeTierlists(fbUser.uid);
-    subscribeVotingHistory();
     subscribeAdminMessage(fbUser.uid);
     updateAuthUI();
     renderCatalog();
@@ -515,14 +510,11 @@ async function init() {
   });
 }
 
-// История баллов голосования (снимки при каждой смене раунда) — только для админов,
-// нужна для графиков "как менялась популярность игрока" на вкладке "Голосование".
+// История баллов голосования (снимки при каждой смене раунда) — теперь публичная,
+// нужна для графиков "как менялась популярность игрока" на вкладке "Рейтинг",
+// которую теперь видят все, а не только админы.
 function subscribeVotingHistory() {
-  if (unsubVotingHistory) {
-    unsubVotingHistory();
-    unsubVotingHistory = null;
-  }
-  if (!canManageVoting()) return;
+  if (unsubVotingHistory) return; // уже подписаны — подписка живёт всё время, не зависит от логина
   const q = query(collection(db, "votingHistory"), orderBy("timestamp", "asc"), limit(500));
   unsubVotingHistory = onSnapshot(
     q,
@@ -865,13 +857,9 @@ function updateAuthUI() {
   // Точечные права поверх общего admin-only — обычный админ может не иметь доступа
   // к какому-то конкретному разделу, если главный админ это отключил.
   if (els.openForm) els.openForm.hidden = !canManagePlayers();
-  if (els.tabVoting) els.tabVoting.hidden = !canManageVoting();
-
-  if (!canManageVoting() && state.activeView === "voting") {
-    switchView("catalog");
-  } else if (canManageVoting() && state.activeView === "voting") {
-    renderVotingAdminGrid();
-  }
+  // Вкладка "Рейтинг" теперь видна всем — доступ ограничен только для кнопок
+  // управления раундом внутри неё (см. renderVotingAdminGrid / els.forceVotingRoundButton).
+  if (state.activeView === "voting") renderVotingAdminGrid();
 
   els.loginButton.hidden = loggedIn;
   els.logoutButton.hidden = !loggedIn;
@@ -885,22 +873,6 @@ function updateAuthUI() {
   if (els.tierPoolWrap) els.tierPoolWrap.hidden = !loggedIn;
 
   setPoliticalMapCanEdit(canManageMap());
-
-  let ratingOption = els.sortSelect ? els.sortSelect.querySelector('option[value="rating-desc"]') : null;
-  if (els.sortSelect) {
-    if (admin && !ratingOption) {
-      ratingOption = document.createElement("option");
-      ratingOption.value = "rating-desc";
-      ratingOption.textContent = "По баллам голосования (админ)";
-      els.sortSelect.appendChild(ratingOption);
-    } else if (!admin && ratingOption) {
-      ratingOption.remove();
-      if (state.sort === "rating-desc") {
-        state.sort = "alpha-asc";
-        els.sortSelect.value = "alpha-asc";
-      }
-    }
-  }
 
   refreshIcons();
 }
@@ -1314,10 +1286,16 @@ function skipVote() {
   renderVotingWidget();
 }
 
-/* ================= Voting admin tab ================= */
+/* ================= Voting / rating tab ================= */
 
 function renderVotingAdminGrid() {
-  if (!els.votingAdminGrid || !canManageVoting()) return;
+  if (!els.votingAdminGrid) return;
+
+  // Кнопки управления раундом ("начать сейчас" / "сбросить все голоса") — только для
+  // админов с правом voting; таймер и сама таблица рейтинга ниже видны всем.
+  const admin = canManageVoting();
+  if (els.forceVotingRoundButton) els.forceVotingRoundButton.hidden = !admin;
+  if (els.resetVotingScoresButton) els.resetVotingScoresButton.hidden = !admin;
 
   const players = state.players.slice().sort((a, b) => {
     const totalA = ((state.voting.favScores || {})[a.id] || 0) + ((state.voting.unfavScores || {})[a.id] || 0);
@@ -1889,7 +1867,6 @@ function promptModal(title, defaultValue) {
 /* ================= Tabs ================= */
 
 function switchView(view) {
-  if (view === "voting" && !canManageVoting()) view = "catalog";
   state.activeView = view;
   const isCatalog = view === "catalog";
   const isTierlist = view === "tierlist";
@@ -2007,9 +1984,7 @@ function playerCard(player) {
     : "";
 
   const voteScore = ((state.voting.favScores || {})[player.id] || 0) + ((state.voting.unfavScores || {})[player.id] || 0);
-  const scoreBadge = isAdmin()
-    ? `<span class="vote-score-badge" title="Баллы голосования (видно только админам)"><i data-lucide="flame" aria-hidden="true"></i>${voteScore}</span>`
-    : "";
+  const scoreBadge = `<span class="vote-score-badge" title="Рейтинг по голосованию"><i data-lucide="flame" aria-hidden="true"></i>${voteScore}</span>`;
 
   const socials = [
     player.telegram
