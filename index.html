@@ -61,12 +61,20 @@
             <i data-lucide="moon" aria-hidden="true"></i>
           </button>
 
+          <a class="icon-button" href="https://t.me/neatexq" target="_blank" rel="noopener noreferrer" aria-label="Связь с разработчиком" title="Связь с разработчиком">
+            <i data-lucide="message-circle" aria-hidden="true"></i>
+          </a>
+
           <button class="icon-button admin-only" id="openAdminsButton" type="button" aria-label="Управление админами" hidden>
             <i data-lucide="shield" aria-hidden="true"></i>
           </button>
 
           <button class="icon-button admin-only" id="openLogButton" type="button" aria-label="Лог действий админов" hidden>
             <i data-lucide="scroll-text" aria-hidden="true"></i>
+          </button>
+
+          <button class="icon-button admin-only" id="openAdminMessageButton" type="button" aria-label="Написать сообщение игроку" title="Написать сообщение игроку" hidden>
+            <i data-lucide="send" aria-hidden="true"></i>
           </button>
 
           <button class="secondary-button" id="loginButton" type="button">
@@ -83,6 +91,11 @@
             <i data-lucide="plus" aria-hidden="true"></i>
             <span>Игрок</span>
           </button>
+
+          <a class="pass-button" href="https://t.me/tribute/app?startapp=sb7O" target="_blank" rel="noopener noreferrer" aria-label="Купить проходку" title="Купить проходку">
+            <img src="assets/buy-pass-icon.png" alt="" />
+            <span>Купить проходку</span>
+          </a>
         </div>
       </div>
     </header>
@@ -266,7 +279,6 @@
               <button type="button" class="polmap-tool" data-tool="diamond" title="Ромб (D)"><i data-lucide="diamond"></i></button>
               <button type="button" class="polmap-tool" data-tool="arrow" title="Стрелка (A)"><i data-lucide="move-right"></i></button>
               <button type="button" class="polmap-tool" data-tool="drawArrow" title="Стрелка-кисть (Shift+A)"><i data-lucide="navigation"></i></button>
-              <button type="button" class="polmap-tool" data-tool="pin" title="Точка (P)"><i data-lucide="map-pin"></i></button>
             </div>
 
             <div class="polmap-tool-options">
@@ -383,10 +395,16 @@
             <span class="voting-timer-label">До следующего голосования</span>
             <span class="voting-timer" id="votingCountdown">—</span>
           </div>
-          <button class="primary-button" id="forceVotingRoundButton" type="button">
-            <i data-lucide="zap" aria-hidden="true"></i>
-            <span>Начать голосование сейчас</span>
-          </button>
+          <div class="voting-admin-toolbar-actions">
+            <button class="secondary-button danger-button" id="resetVotingScoresButton" type="button">
+              <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+              <span>Сбросить все голоса</span>
+            </button>
+            <button class="primary-button" id="forceVotingRoundButton" type="button">
+              <i data-lucide="zap" aria-hidden="true"></i>
+              <span>Начать голосование сейчас</span>
+            </button>
+          </div>
         </section>
 
         <section class="voting-admin-grid" id="votingAdminGrid"></section>
@@ -534,6 +552,48 @@
         </div>
       </div>
     </div>
+
+    <!-- ADMIN → PLAYER MESSAGE MODAL -->
+    <div class="modal-backdrop" id="adminMessageModalBackdrop" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adminMessageModalTitle">
+        <div class="modal-head">
+          <h2 id="adminMessageModalTitle">Написать игроку</h2>
+          <button class="icon-button quiet" id="closeAdminMessageModal" type="button" aria-label="Закрыть">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <form id="adminMessageForm" class="modal-form">
+          <label>
+            <span>Ник игрока</span>
+            <input id="adminMessageNickname" type="text" required autocomplete="off" placeholder="Как в профиле" />
+          </label>
+          <label>
+            <span>Текст сообщения</span>
+            <textarea id="adminMessageText" rows="4" required placeholder="Что показать игроку внизу экрана"></textarea>
+          </label>
+
+          <p class="modal-error" id="adminMessageError" hidden>Игрок не найден</p>
+          <button class="primary-button full-width" type="submit">
+            <i data-lucide="send" aria-hidden="true"></i>
+            <span>Отправить</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- ADMIN → PLAYER MESSAGE TOAST -->
+    <div class="admin-message-toast" id="adminMessageToast" hidden>
+      <span class="admin-message-toast-icon"><i data-lucide="megaphone" aria-hidden="true"></i></span>
+      <span class="admin-message-toast-body">
+        <span class="admin-message-toast-title">Сообщение от администрации</span>
+        <span class="admin-message-toast-text" id="adminMessageToastText"></span>
+      </span>
+      <button class="icon-button quiet admin-message-toast-close" id="adminMessageToastClose" type="button" aria-label="Закрыть">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </div>
+
 
 <!-- TIERLIST NAME PROMPT MODAL -->
     <div class="modal-backdrop" id="nameModalBackdrop" hidden>

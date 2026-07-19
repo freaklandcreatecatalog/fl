@@ -22,6 +22,7 @@ import {
   orderBy,
   limit,
   runTransaction,
+  writeBatch,
   increment,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
@@ -94,7 +95,8 @@ const VOTE_PERIOD_MS = 3 * 60 * 60 * 1000; // раунд голосования 
 const VOTE_ROUND_SIZE = 10;
 const VOTE_PICK_SIZE = 3; // сколько любимых нужно выбрать — строго 3
 const VOTE_MIN_UNFAV = 1; // сколько нелюбимых нужно минимум — 1, можно больше
-const VOTE_LOCAL_KEY = "freakland-vote-round"; // на каком раунде это устройство уже проголосовало
+const VOTE_LOCAL_KEY = "freakland-vote-round"; // на каком раунде это устройство нажало "пропустить"
+const GUEST_VOTE_PROMPT_DISMISSED_KEY = "freakland-vote-guest-dismissed"; // гость нажал "не сейчас" в этой вкладке/сессии
 const ADMIN_ROLE_TEXT = "админ";
 
 function isAdminRoleText(role) {
@@ -139,9 +141,12 @@ const state = {
   voting: { roundStartAt: null, playerIds: [], usedPool: [], favScores: {}, unfavScores: {} },
   votingSelection: { favorites: [], unfavorites: [] },
   votingHistory: [],
+  myVoteStatus: "guest", // "guest" | "checking" | "can-vote" | "voted"
 };
 
 let unsubVotingHistory = null;
+let unsubAdminMessage = null;
+let adminMessageToastTimer = null;
 
 let unsubTierlists = null;
 let unsubActiveBoard = null;
@@ -218,6 +223,16 @@ const els = {
   closeVotingInfoModal: document.querySelector("#closeVotingInfoModal"),
 
   openLogButton: document.querySelector("#openLogButton"),
+  openAdminMessage: document.querySelector("#openAdminMessageButton"),
+  adminMessageModal: document.querySelector("#adminMessageModalBackdrop"),
+  closeAdminMessageModal: document.querySelector("#closeAdminMessageModal"),
+  adminMessageForm: document.querySelector("#adminMessageForm"),
+  adminMessageNickname: document.querySelector("#adminMessageNickname"),
+  adminMessageText: document.querySelector("#adminMessageText"),
+  adminMessageError: document.querySelector("#adminMessageError"),
+  adminMessageToast: document.querySelector("#adminMessageToast"),
+  adminMessageToastText: document.querySelector("#adminMessageToastText"),
+  adminMessageToastClose: document.querySelector("#adminMessageToastClose"),
   logModal: document.querySelector("#logModalBackdrop"),
   closeLogModal: document.querySelector("#closeLogModal"),
   logList: document.querySelector("#logList"),
@@ -247,6 +262,7 @@ const els = {
 
   votingCountdown: document.querySelector("#votingCountdown"),
   forceVotingRoundButton: document.querySelector("#forceVotingRoundButton"),
+  resetVotingScoresButton: document.querySelector("#resetVotingScoresButton"),
   votingAdminGrid: document.querySelector("#votingAdminGrid"),
 
   votingStatsModal: document.querySelector("#votingStatsModalBackdrop"),
@@ -329,21 +345,34 @@ async function init() {
     renderTierlist();
     updatePoliticalMapPopulation();
     ensureVotingRound();
+    ensurePersonalVotingSelection();
     renderVotingWidget();
   });
 
-  // Голосование "кто вызывает больше эмоций" — публичное чтение, раунд общий для всех
+  // Голосование "кто вызывает больше эмоций" — таймер раунда общий для всех,
+  // но конкретных 10 игроков каждый зритель видит своих (см. ensurePersonalVotingSelection)
   onSnapshot(doc(db, "catalog", "voting"), (snap) => {
     const data = snap.exists() ? snap.data() : null;
+    const prevRoundStartAt = state.voting.roundStartAt;
     state.voting = {
       roundStartAt: typeof data?.roundStartAt === "number" ? data.roundStartAt : null,
-      playerIds: Array.isArray(data?.playerIds) ? data.playerIds : [],
-      usedPool: Array.isArray(data?.usedPool) ? data.usedPool : [],
+      playerIds: state.voting.playerIds || [],
       favScores: data && typeof data.favScores === "object" && data.favScores ? data.favScores : {},
       unfavScores: data && typeof data.unfavScores === "object" && data.unfavScores ? data.unfavScores : {},
     };
-    renderVotingWidget();
-    renderCatalog();
+
+    // Каждый брошенный кем-то голос меняет только favScores/unfavScores в этом же
+    // документе — раунд (roundStartAt) при этом НЕ меняется. Раньше мы безусловно
+    // перерисовывали и виджет голосования, и весь каталог игроков на любое такое
+    // обновление, из-за чего у всех посетителей сайт "мигал"/перезагружался каждый
+    // раз, когда кто-то голосовал. Каталог теперь вообще не пересобирается из-за
+    // чужого голоса — рейтинг по очкам пересчитывается при следующей ручной
+    // пересортировке/загрузке страницы, а не в реальном времени, и это того стоит.
+    const roundChanged = prevRoundStartAt !== state.voting.roundStartAt;
+    if (roundChanged) {
+      ensurePersonalVotingSelection();
+      refreshMyVoteStatus();
+    }
     updateVotingCountdown();
     if (state.activeView === "voting") renderVotingAdminGrid();
   });
@@ -395,12 +424,19 @@ async function init() {
         unsubVotingHistory();
         unsubVotingHistory = null;
       }
+      if (unsubAdminMessage) {
+        unsubAdminMessage();
+        unsubAdminMessage = null;
+      }
+      hideAdminMessageToast();
       state.tierlists = {};
       state.activeTierlist = "";
       state.votingHistory = [];
+      state.myVoteStatus = "guest";
       updateAuthUI();
       renderCatalog();
       renderTierlist();
+      renderVotingWidget();
       return;
     }
 
@@ -419,9 +455,11 @@ async function init() {
     };
     subscribeTierlists(fbUser.uid);
     subscribeVotingHistory();
+    subscribeAdminMessage(fbUser.uid);
     updateAuthUI();
     renderCatalog();
     renderTierlist();
+    refreshMyVoteStatus();
   });
 }
 
@@ -442,6 +480,63 @@ function subscribeVotingHistory() {
     },
     (error) => console.error("Не получилось загрузить историю голосования", error),
   );
+}
+
+// Личное сообщение от главного админа конкретному игроку — одно поле на аккаунт
+// (adminMessages/{uid}), приходит через onSnapshot и всплывает тостом в углу экрана,
+// как системное уведомление. localStorage хранит createdAt последнего показанного
+// сообщения на этом устройстве, чтобы одно и то же сообщение не всплывало заново
+// при каждой перезагрузке страницы.
+function subscribeAdminMessage(uid) {
+  if (unsubAdminMessage) {
+    unsubAdminMessage();
+    unsubAdminMessage = null;
+  }
+  unsubAdminMessage = onSnapshot(
+    doc(db, "adminMessages", uid),
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      if (typeof data.text !== "string" || !data.text || typeof data.createdAt !== "number") return;
+
+      const seenKey = `freaklandAdminMsgSeen:${uid}`;
+      const lastSeen = Number(localStorage.getItem(seenKey) || 0);
+      if (data.createdAt <= lastSeen) return;
+
+      localStorage.setItem(seenKey, String(data.createdAt));
+      showAdminMessageToast(data.text);
+    },
+    (error) => console.error("Не получилось подписаться на сообщения администрации", error),
+  );
+}
+
+function showAdminMessageToast(text) {
+  if (!els.adminMessageToast || !els.adminMessageToastText) return;
+  els.adminMessageToastText.textContent = text;
+  els.adminMessageToast.hidden = false;
+  els.adminMessageToast.classList.remove("is-hiding");
+  requestAnimationFrame(() => els.adminMessageToast.classList.add("is-visible"));
+  refreshIcons();
+
+  if (adminMessageToastTimer) clearTimeout(adminMessageToastTimer);
+  adminMessageToastTimer = setTimeout(hideAdminMessageToast, 15000);
+}
+
+function hideAdminMessageToast() {
+  if (adminMessageToastTimer) {
+    clearTimeout(adminMessageToastTimer);
+    adminMessageToastTimer = null;
+  }
+  if (!els.adminMessageToast || els.adminMessageToast.hidden) return;
+
+  els.adminMessageToast.classList.remove("is-visible");
+  els.adminMessageToast.classList.add("is-hiding");
+  setTimeout(() => {
+    if (els.adminMessageToast.classList.contains("is-hiding")) {
+      els.adminMessageToast.hidden = true;
+      els.adminMessageToast.classList.remove("is-hiding");
+    }
+  }, 260);
 }
 
 function populateCitySelect() {
@@ -730,6 +825,7 @@ function updateAuthUI() {
   els.logoutButton.hidden = !loggedIn;
   els.openAdmins.hidden = !isMainAdmin();
   els.openLogButton.hidden = !isMainAdmin();
+  if (els.openAdminMessage) els.openAdminMessage.hidden = !isMainAdmin();
 
   if (els.tierlistLoginRequired) els.tierlistLoginRequired.hidden = loggedIn;
   if (els.tierlistToolbar) els.tierlistToolbar.hidden = !loggedIn;
@@ -784,9 +880,10 @@ function skinHeadUrl(name) {
 
 /* ================= Voting (кто вызывает больше эмоций) ================= */
 
-// Раунд считается по "мировому" времени от момента старта раунда (roundStartAt),
-// который лежит в общем документе Firestore — поэтому у всех посетителей один и тот
-// же раунд, и он не пересоздаётся при перезаходе на сайт.
+// Раунд-таймер (каждые 3 часа) общий для всех и лежит в Firestore, чтобы у всех
+// синхронно менялось "время до следующего раунда". А вот КАКИХ ИМЕННО игроков
+// показать — теперь решается локально в браузере каждого зрителя (см.
+// ensurePersonalVotingSelection), поэтому в общем документе больше нет playerIds/usedPool.
 async function ensureVotingRound(force = false) {
   const now = Date.now();
   if (!force) {
@@ -805,27 +902,6 @@ async function ensureVotingRound(force = false) {
 
       if (!force && currentStart && Date.now() < currentStart + VOTE_PERIOD_MS) return; // кто-то уже обновил раунд
 
-      const eligible = state.players.filter((player) => !isAdminRoleText(player.role));
-      let usedPool = Array.isArray(data.usedPool)
-        ? data.usedPool.filter((id) => eligible.some((player) => player.id === id))
-        : [];
-
-      let candidates = eligible.filter((player) => !usedPool.includes(player.id));
-      if (candidates.length === 0) {
-        // Пул закончился — начинаем новый круг, но стараемся не повторять
-        // прошлый раунд сразу же (только если игроков достаточно для этого).
-        usedPool = [];
-        const previousRoundIds = Array.isArray(data.playerIds) ? data.playerIds : [];
-        const withoutPrevious = eligible.filter((player) => !previousRoundIds.includes(player.id));
-        candidates = withoutPrevious.length >= Math.min(VOTE_ROUND_SIZE, eligible.length) ? withoutPrevious : eligible.slice();
-      }
-
-      const count = Math.min(VOTE_ROUND_SIZE, candidates.length);
-      const selected = shuffleArray(candidates)
-        .slice(0, count)
-        .map((player) => player.id);
-      const newUsedPool = [...usedPool, ...selected];
-
       const favScores = data.favScores && typeof data.favScores === "object" ? data.favScores : {};
       const unfavScores = data.unfavScores && typeof data.unfavScores === "object" ? data.unfavScores : {};
 
@@ -841,8 +917,6 @@ async function ensureVotingRound(force = false) {
 
       tx.set(ref, {
         roundStartAt: now,
-        playerIds: selected,
-        usedPool: newUsedPool,
         favScores,
         unfavScores,
       });
@@ -850,6 +924,65 @@ async function ensureVotingRound(force = false) {
   } catch (error) {
     console.error("Не получилось обновить раунд голосования", error);
   }
+}
+
+// Личная десятка игроков для голосования — своя у каждого зрителя, хранится в
+// localStorage этого браузера. Пересчитывается только когда реально сменился
+// общий раунд (state.voting.roundStartAt), а не на каждое обновление страницы,
+// и старается не повторять тех же игроков, что этот зритель уже видел, пока не
+// покажет весь каталог по кругу.
+const VOTE_LOCAL_SELECTION_KEY = "freakland-vote-local-selection";
+
+function readLocalVotingSelectionState() {
+  try {
+    const raw = localStorage.getItem(VOTE_LOCAL_SELECTION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalVotingSelectionState(value) {
+  try {
+    localStorage.setItem(VOTE_LOCAL_SELECTION_KEY, JSON.stringify(value));
+  } catch {
+    /* localStorage недоступен — просто не сохраняем между визитами */
+  }
+}
+
+function ensurePersonalVotingSelection() {
+  const roundStartAt = state.voting.roundStartAt;
+  if (roundStartAt === null || !state.players.length) {
+    state.voting.playerIds = [];
+    return;
+  }
+
+  const eligible = state.players.filter((player) => !isAdminRoleText(player.role));
+  const local = readLocalVotingSelectionState();
+
+  if (local && local.roundStartAt === roundStartAt && Array.isArray(local.playerIds) && local.playerIds.length) {
+    const stillValid = local.playerIds.filter((id) => eligible.some((player) => player.id === id));
+    if (stillValid.length) {
+      state.voting.playerIds = stillValid;
+      return;
+    }
+  }
+
+  let usedPool = local && Array.isArray(local.usedPool) ? local.usedPool.filter((id) => eligible.some((player) => player.id === id)) : [];
+  let candidates = eligible.filter((player) => !usedPool.includes(player.id));
+  if (candidates.length === 0) {
+    usedPool = [];
+    candidates = eligible.slice();
+  }
+
+  const count = Math.min(VOTE_ROUND_SIZE, candidates.length);
+  const selected = shuffleArray(candidates)
+    .slice(0, count)
+    .map((player) => player.id);
+  const newUsedPool = [...usedPool, ...selected];
+
+  state.voting.playerIds = selected;
+  writeLocalVotingSelectionState({ roundStartAt, playerIds: selected, usedPool: newUsedPool });
 }
 
 async function forceNewVotingRound() {
@@ -863,6 +996,27 @@ async function forceNewVotingRound() {
     logAction("Запущено внеочередное голосование (без таймера)");
   } finally {
     els.forceVotingRoundButton.disabled = false;
+  }
+}
+
+// Обнуляет favScores/unfavScores у ВСЕХ игроков, ничего больше не трогая: raundStartAt
+// (а значит и таймер, и текущая десятка) остаётся тем же — сбрасываются только очки.
+// По правилам Firestore это обычный update с тем же roundStartAt, так что подходит
+// под ветку (а) в catalog/voting — авторизации админа для этого достаточно.
+async function resetVotingScores() {
+  if (!canManageVoting() || !els.resetVotingScoresButton) return;
+  const ok = confirm("Сбросить очки голосования у всех игроков? Действие необратимо.");
+  if (!ok) return;
+
+  els.resetVotingScoresButton.disabled = true;
+  try {
+    await updateDoc(doc(db, "catalog", "voting"), { favScores: {}, unfavScores: {} });
+    logAction("Сброшены все очки голосования");
+  } catch (error) {
+    console.error(error);
+    alert("Не получилось сбросить голоса. Попробуй ещё раз.");
+  } finally {
+    els.resetVotingScoresButton.disabled = false;
   }
 }
 
@@ -881,18 +1035,108 @@ function updateVotingCountdown() {
   els.votingCountdown.textContent = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function hasVotedThisRound() {
-  const votedRound = Number(localStorage.getItem(VOTE_LOCAL_KEY));
-  return Number.isFinite(votedRound) && state.voting.roundStartAt !== null && votedRound === state.voting.roundStartAt;
+// Проверяем "уже голосовал ли этот аккаунт в этом раунде" не по localStorage
+// (это легко обойти), а по факту существования документа votes/{uid}_{roundStartAt}
+// на сервере. requestId защищает от гонки — если пока ждали ответ, раунд снова
+// сменился, устаревший результат просто игнорируется.
+let voteStatusRequestId = 0;
+
+async function refreshMyVoteStatus() {
+  const requestId = ++voteStatusRequestId;
+
+  if (!state.user) {
+    state.myVoteStatus = "guest";
+    renderVotingWidget();
+    return;
+  }
+  if (state.voting.roundStartAt === null) {
+    state.myVoteStatus = "checking";
+    renderVotingWidget();
+    return;
+  }
+
+  state.myVoteStatus = "checking";
+  renderVotingWidget();
+
+  try {
+    const voteId = `${state.user.uid}_${state.voting.roundStartAt}`;
+    const voteSnap = await getDoc(doc(db, "votes", voteId));
+    if (requestId !== voteStatusRequestId) return; // пришёл более новый запрос — этот ответ устарел
+    state.myVoteStatus = voteSnap.exists() ? "voted" : "can-vote";
+  } catch (error) {
+    console.error("Не получилось проверить голос", error);
+    if (requestId !== voteStatusRequestId) return;
+    state.myVoteStatus = "can-vote"; // не даём виджету зависнуть навсегда из-за сетевой ошибки
+  }
+  renderVotingWidget();
+}
+
+function hasSkippedThisRoundLocally() {
+  const skippedRound = Number(localStorage.getItem(VOTE_LOCAL_KEY));
+  return Number.isFinite(skippedRound) && state.voting.roundStartAt !== null && skippedRound === state.voting.roundStartAt;
+}
+
+function dismissGuestVotingPrompt() {
+  try {
+    sessionStorage.setItem(GUEST_VOTE_PROMPT_DISMISSED_KEY, "1");
+  } catch {
+    /* нет доступа к sessionStorage — просто не запоминаем */
+  }
+  renderVotingWidget();
+}
+
+function guestVotingPromptDismissed() {
+  try {
+    return sessionStorage.getItem(GUEST_VOTE_PROMPT_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function renderVotingWidget() {
   if (!els.votingBar) return;
 
+  if (state.voting.roundStartAt === null) {
+    els.votingBar.hidden = true;
+    return;
+  }
+
+  // Гость (не вошёл в аккаунт) — показываем приглашение зарегистрироваться вместо пикера.
+  if (!state.user) {
+    if (guestVotingPromptDismissed()) {
+      els.votingBar.hidden = true;
+      return;
+    }
+    els.votingBar.hidden = false;
+    els.votingTitle.textContent = "Голосовать могут только зарегистрированные";
+    els.votingHint.textContent = "Зарегистрируйся за 10 секунд (только ник и пароль) и выбери любимых и нелюбимых игроков";
+    els.votingHeads.innerHTML = "";
+    const skipLabel = els.votingSkipButton?.querySelector("span");
+    if (skipLabel) skipLabel.textContent = "Не сейчас";
+    const submitLabel = els.votingSubmitButton?.querySelector("span");
+    if (submitLabel) submitLabel.textContent = "Зарегистрироваться";
+    if (els.votingSubmitButton) els.votingSubmitButton.disabled = false;
+    refreshIcons();
+    return;
+  }
+
+  // Возвращаем подписи кнопок в обычный режим на случай, если до этого был гостевой режим.
+  const skipLabel = els.votingSkipButton?.querySelector("span");
+  if (skipLabel) skipLabel.textContent = "Пропустить";
+  const submitLabel = els.votingSubmitButton?.querySelector("span");
+  if (submitLabel) submitLabel.textContent = "Отправить";
+
+  // Проверка на сервере ещё не пришла — прячем виджет, чтобы не мигнуть пикером,
+  // который через долю секунды может тут же скрыться (если уже проголосовал).
+  if (state.myVoteStatus === "checking") {
+    els.votingBar.hidden = true;
+    return;
+  }
+
   const playerIds = state.voting.playerIds || [];
   const players = playerIds.map((id) => state.players.find((player) => player.id === id)).filter(Boolean);
 
-  if (!players.length || state.voting.roundStartAt === null || hasVotedThisRound()) {
+  if (!players.length || state.myVoteStatus === "voted" || hasSkippedThisRoundLocally()) {
     els.votingBar.hidden = true;
     return;
   }
@@ -947,12 +1191,26 @@ function handleVotingHeadClick(id) {
 }
 
 async function submitVote() {
+  // Гость нажал кнопку, которая в этом режиме превращена в "Зарегистрироваться"
+  if (!state.user) {
+    setLoginModalMode("register");
+    openModal(els.loginModal, els.registerName);
+    return;
+  }
+
   const sel = state.votingSelection;
   if (sel.favorites.length !== VOTE_PICK_SIZE || sel.unfavorites.length < VOTE_MIN_UNFAV) return;
   const roundStartAt = state.voting.roundStartAt;
   if (roundStartAt === null) return;
 
   els.votingSubmitButton.disabled = true;
+
+  // Голос пишем атомарно: (1) создаём документ votes/{uid}_{roundStartAt} — по правилам
+  // Firestore такой документ можно только СОЗДАТЬ, но не перезаписать, так что повторное
+  // голосование этим же аккаунтом в этом же раунде отклонится сервером, а не просто
+  // браузером; (2) увеличиваем общие очки игроков в том же батче. Если что-то из этого
+  // не пройдёт (например, голос уже был), не пройдёт и всё остальное.
+  const voteId = `${state.user.uid}_${roundStartAt}`;
   const patch = {};
   sel.favorites.forEach((id) => {
     patch[`favScores.${id}`] = increment(1);
@@ -962,20 +1220,41 @@ async function submitVote() {
   });
 
   try {
-    await updateDoc(doc(db, "catalog", "voting"), patch);
-    localStorage.setItem(VOTE_LOCAL_KEY, String(roundStartAt));
+    const batch = writeBatch(db);
+    batch.set(doc(db, "votes", voteId), {
+      uid: state.user.uid,
+      roundStartAt,
+      favorites: sel.favorites,
+      unfavorites: sel.unfavorites,
+      createdAt: Date.now(),
+    });
+    batch.update(doc(db, "catalog", "voting"), patch);
+    await batch.commit();
+
+    state.myVoteStatus = "voted";
     state.votingSelection = { favorites: [], unfavorites: [] };
     renderVotingWidget();
   } catch (error) {
     console.error(error);
-    alert("Не получилось отправить голос. Попробуй ещё раз.");
-    els.votingSubmitButton.disabled = false;
+    if (error.code === "permission-denied") {
+      // Скорее всего, этот аккаунт уже голосовал в этом раунде (документ votes/{id} уже есть).
+      state.myVoteStatus = "voted";
+      alert("Похоже, ты уже голосовал в этом раунде.");
+      renderVotingWidget();
+    } else {
+      alert("Не получилось отправить голос. Попробуй ещё раз.");
+      els.votingSubmitButton.disabled = false;
+    }
   }
 }
 
 // Для тех, кто не хочет оценивать в этом раунде — просто прячем виджет
 // до следующей смены раунда, без отправки голосов.
 function skipVote() {
+  if (!state.user) {
+    dismissGuestVotingPrompt();
+    return;
+  }
   const roundStartAt = state.voting.roundStartAt;
   if (roundStartAt === null) return;
   localStorage.setItem(VOTE_LOCAL_KEY, String(roundStartAt));
@@ -1338,6 +1617,58 @@ function bindEvents() {
     await renderLogList();
   });
 
+  // Сообщение игроку от главного админа
+  els.openAdminMessage?.addEventListener("click", () => {
+    if (!isMainAdmin()) return;
+    els.adminMessageForm?.reset();
+    if (els.adminMessageError) els.adminMessageError.hidden = true;
+    openModal(els.adminMessageModal, els.adminMessageNickname);
+  });
+  els.closeAdminMessageModal?.addEventListener("click", () => closeModal(els.adminMessageModal));
+
+  els.adminMessageForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!isMainAdmin()) return;
+
+    const nickname = els.adminMessageNickname.value.trim();
+    const text = els.adminMessageText.value.trim();
+    if (els.adminMessageError) els.adminMessageError.hidden = true;
+    if (!nickname || !text) return;
+
+    const submitButton = els.adminMessageForm.querySelector("button[type='submit']");
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const q = query(collection(db, "users"), where("nicknameLower", "==", nickname.toLowerCase()));
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        if (els.adminMessageError) {
+          els.adminMessageError.textContent = "Игрок с таким ником не найден — он ещё не регистрировался";
+          els.adminMessageError.hidden = false;
+        }
+        return;
+      }
+      const targetDoc = snap.docs[0];
+      await setDoc(doc(db, "adminMessages", targetDoc.id), {
+        text,
+        from: state.user?.nickname || "Админ",
+        createdAt: Date.now(),
+      });
+      logAction(`Отправлено сообщение игроку: ${targetDoc.data().nickname}`);
+      els.adminMessageForm.reset();
+      closeModal(els.adminMessageModal);
+    } catch (error) {
+      console.error(error);
+      if (els.adminMessageError) {
+        els.adminMessageError.textContent = "Не получилось отправить сообщение, попробуй ещё раз";
+        els.adminMessageError.hidden = false;
+      }
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+
+  els.adminMessageToastClose?.addEventListener("click", hideAdminMessageToast);
+
   // Tabs
   els.tabCatalog.addEventListener("click", () => switchView("catalog"));
   els.tabTierlist.addEventListener("click", () => switchView("tierlist"));
@@ -1345,6 +1676,7 @@ function bindEvents() {
   els.tabVoting?.addEventListener("click", () => switchView("voting"));
 
   els.forceVotingRoundButton?.addEventListener("click", forceNewVotingRound);
+  els.resetVotingScoresButton?.addEventListener("click", resetVotingScores);
   els.closeVotingStatsModal?.addEventListener("click", () => closeModal(els.votingStatsModal));
 
   // Tierlist controls

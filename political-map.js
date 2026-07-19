@@ -22,7 +22,6 @@ const TOOLS = [
   { id: "diamond", icon: "diamond", label: "Ромб", hotkey: "D", code: "KeyD" },
   { id: "arrow", icon: "move-right", label: "Стрелка", hotkey: "A", code: "KeyA" },
   { id: "drawArrow", icon: "spline", label: "Стрелка-кисть", hotkey: "Shift+A", code: "KeyA" },
-  { id: "pin", icon: "map-pin", label: "Точка", hotkey: "P", code: "KeyP" },
 ];
 
 // Инструменты, у которых есть настраиваемая толщина — их можно менять зажатием ПКМ.
