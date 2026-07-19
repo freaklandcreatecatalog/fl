@@ -2649,10 +2649,14 @@ body.is-polmap-view .shell {
   color: #e5484d;
 }
 
-.count-fav svg,
-.count-unfav svg {
-  width: 12px;
-  height: 12px;
+.count-fav img,
+.count-unfav img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  border-radius: 3px;
+  vertical-align: middle;
+  transform: scale(1.35); /* картинка визуально крупнее, но карточку не раздвигает — размер в layout остаётся прежним */
 }
 
 /* ---------- Voting stats modal ---------- */
@@ -2675,6 +2679,13 @@ body.is-polmap-view .shell {
 .voting-stats-stat .count-fav,
 .voting-stats-stat .count-unfav {
   font-size: 20px;
+}
+
+.voting-stats-stat .count-fav img,
+.voting-stats-stat .count-unfav img {
+  width: 24px;
+  height: 24px;
+  transform: scale(1.25);
 }
 
 .voting-stats-stat small {

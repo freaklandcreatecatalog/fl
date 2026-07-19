@@ -1293,8 +1293,8 @@ function votingAdminCardHtml(player) {
       <span class="voting-admin-avatar"><img src="${escapeAttr(skinHeadUrl(player.name))}" alt="" loading="lazy" /></span>
       <span class="voting-admin-name" title="${escapeAttr(player.name)}">${escapeHtml(player.name)}</span>
       <span class="voting-admin-counts">
-        <span class="count-fav"><i data-lucide="heart" aria-hidden="true"></i>${fav}</span>
-        <span class="count-unfav"><i data-lucide="heart-crack" aria-hidden="true"></i>${unfav}</span>
+        <span class="count-fav"><img src="assets/rating-up.png" alt="+" /> ${fav}</span>
+        <span class="count-unfav"><img src="assets/rating-down.jpg" alt="-" /> ${unfav}</span>
       </span>
     </button>`;
 }
@@ -1308,8 +1308,8 @@ function openVotingStatsModal(playerId) {
 
   els.votingStatsModalTitle.textContent = player.name;
   els.votingStatsSummary.innerHTML = `
-    <div class="voting-stats-stat"><span class="count-fav"><i data-lucide="heart" aria-hidden="true"></i> ${fav}</span><small>любимый</small></div>
-    <div class="voting-stats-stat"><span class="count-unfav"><i data-lucide="heart-crack" aria-hidden="true"></i> ${unfav}</span><small>нелюбимый</small></div>
+    <div class="voting-stats-stat"><span class="count-fav"><img src="assets/rating-up.png" alt="+" /> ${fav}</span><small>любимый</small></div>
+    <div class="voting-stats-stat"><span class="count-unfav"><img src="assets/rating-down.jpg" alt="-" /> ${unfav}</span><small>нелюбимый</small></div>
   `;
   els.votingStatsChart.innerHTML = buildVotingChartSvg(playerId);
 
