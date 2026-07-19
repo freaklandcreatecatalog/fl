@@ -91,6 +91,10 @@ const LOG_MAX_ENTRIES = 300;
 const DEFAULT_ROLE = "Игрок";
 
 /* ================= Voting (кто вызывает больше эмоций) ================= */
+// Адрес твоего Cloudflare Worker'а из twitch-status-worker.js — замени на свой после деплоя.
+const TWITCH_STATUS_ENDPOINT = "https://twitch.freaklandcreate.workers.dev/";
+const TWITCH_STATUS_POLL_MS = 60 * 1000; // как часто спрашивать, кто сейчас в эфире
+
 const VOTE_PERIOD_MS = 3 * 60 * 60 * 1000; // раунд голосования — каждые 3 часа "мирового времени"
 const VOTE_ROUND_SIZE = 10;
 const VOTE_PICK_SIZE = 3; // сколько любимых нужно выбрать — строго 3
@@ -112,6 +116,49 @@ function shuffleArray(list) {
   return arr;
 }
 
+// Достаём ник канала из ссылки вида "https://twitch.tv/ник" (её хранит player.twitch).
+function twitchLoginFromUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.toLowerCase().endsWith("twitch.tv")) return "";
+    return parsed.pathname.split("/").filter(Boolean)[0]?.toLowerCase() || "";
+  } catch {
+    return "";
+  }
+}
+
+// Раз в минуту спрашиваем у своего Cloudflare Worker'а (см. twitch-status-worker.js),
+// кто из игроков с привязанным Twitch сейчас в эфире. Ключи Twitch туда не попадают —
+// воркер сам ходит в Twitch API и просто отдаёт список ников.
+async function refreshTwitchLiveStatus() {
+  const logins = Array.from(
+    new Set(state.players.map((player) => twitchLoginFromUrl(player.twitch)).filter(Boolean)),
+  );
+  if (!logins.length || TWITCH_STATUS_ENDPOINT.includes("ЗАМЕНИ-НА-СВОЙ-WORKER")) return;
+
+  try {
+    const res = await fetch(`${TWITCH_STATUS_ENDPOINT}/?channels=${encodeURIComponent(logins.join(","))}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.liveTwitchChannels = new Set(Array.isArray(data.live) ? data.live.map((c) => c.toLowerCase()) : []);
+  } catch (error) {
+    console.error("Не получилось проверить, кто в эфире на Twitch", error);
+    return;
+  }
+
+  // Если каталог сейчас отсортирован "по эфиру" — порядок карточек мог измениться,
+  // тут нужна полная пересборка. Иначе просто подсвечиваем/гасим нужные кнопки на
+  // месте, без пересборки всего каталога (чтобы не мигало, как было с голосами).
+  if (state.sort === "live-desc") {
+    renderCatalog();
+    return;
+  }
+  els.grid.querySelectorAll(".social-link.is-twitch[data-twitch-login]").forEach((link) => {
+    link.classList.toggle("is-live", state.liveTwitchChannels.has(link.dataset.twitchLogin));
+  });
+}
+
 const DEFAULT_TIER_TEMPLATE = () => [
   { id: crypto.randomUUID(), name: "S", color: "#f6d55c", playerIds: [] },
   { id: crypto.randomUUID(), name: "A", color: "#8ce99a", playerIds: [] },
@@ -124,7 +171,7 @@ const DEFAULT_TIER_TEMPLATE = () => [
 const state = {
   players: [],
   query: "",
-  sort: "alpha-asc",
+  sort: "live-desc",
   user: null, // { uid, nickname, isAdmin, isMain }
   tierlists: {},
   activeTierlist: "",
@@ -142,6 +189,7 @@ const state = {
   votingSelection: { favorites: [], unfavorites: [] },
   votingHistory: [],
   myVoteStatus: "guest", // "guest" | "checking" | "can-vote" | "voted"
+  liveTwitchChannels: new Set(), // ники каналов (нижний регистр), которые сейчас в эфире
 };
 
 let unsubVotingHistory = null;
@@ -332,11 +380,14 @@ async function init() {
   applyInitialTheme();
   populateCitySelect();
   bindEvents();
+  if (els.sortSelect) els.sortSelect.value = state.sort;
   setupTierPhotoPreview();
   initPoliticalMapModule();
   updateAuthUI();
   renderTierlist();
   refreshIcons();
+
+  setInterval(refreshTwitchLiveStatus, TWITCH_STATUS_POLL_MS);
 
   // Общий каталог игроков — публичное чтение, синхронизируется у всех сразу
   onSnapshot(doc(db, "catalog", "players"), (snap) => {
@@ -347,6 +398,7 @@ async function init() {
     ensureVotingRound();
     ensurePersonalVotingSelection();
     renderVotingWidget();
+    refreshTwitchLiveStatus();
   });
 
   // Голосование "кто вызывает больше эмоций" — таймер раунда общий для всех,
@@ -1867,6 +1919,12 @@ function renderCatalog() {
   let players = state.players.filter((player) => player.name.toLowerCase().includes(state.query));
 
   players = players.slice().sort((a, b) => {
+    if (state.sort === "live-desc") {
+      const liveA = state.liveTwitchChannels.has(twitchLoginFromUrl(a.twitch)) ? 1 : 0;
+      const liveB = state.liveTwitchChannels.has(twitchLoginFromUrl(b.twitch)) ? 1 : 0;
+      if (liveB !== liveA) return liveB - liveA;
+      return a.name.localeCompare(b.name, "ru");
+    }
     if (state.sort === "rating-desc") {
       const scoreA = ((state.voting.favScores || {})[a.id] || 0) + ((state.voting.unfavScores || {})[a.id] || 0);
       const scoreB = ((state.voting.favScores || {})[b.id] || 0) + ((state.voting.unfavScores || {})[b.id] || 0);
@@ -1958,7 +2016,7 @@ function playerCard(player) {
       ? `<a class="social-link" href="${escapeAttr(player.telegram)}" target="_blank" rel="noreferrer" aria-label="Telegram ${escapeAttr(player.name)}"><i data-lucide="send" aria-hidden="true"></i></a>`
       : "",
     player.twitch
-      ? `<a class="social-link is-twitch" href="${escapeAttr(player.twitch)}" target="_blank" rel="noreferrer" aria-label="Twitch ${escapeAttr(player.name)}"><i data-lucide="tv" aria-hidden="true"></i></a>`
+      ? `<a class="social-link is-twitch${state.liveTwitchChannels.has(twitchLoginFromUrl(player.twitch)) ? " is-live" : ""}" data-twitch-login="${escapeAttr(twitchLoginFromUrl(player.twitch))}" href="${escapeAttr(player.twitch)}" target="_blank" rel="noreferrer" aria-label="Twitch ${escapeAttr(player.name)}"><i data-lucide="tv" aria-hidden="true"></i></a>`
       : "",
   ].join("");
 
@@ -2621,8 +2679,9 @@ function stopAutoScroll() {
 
 function applyInitialTheme() {
   const saved = localStorage.getItem(THEME_KEY);
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  els.root.dataset.theme = saved || (prefersDark ? "dark" : "light");
+  // По умолчанию — тёмная тема всегда, независимо от настроек системы/браузера
+  // (раньше подхватывали prefers-color-scheme, из-за чего на некоторых ПК открывалась светлая).
+  els.root.dataset.theme = saved || "dark";
   updateThemeIcon();
 }
 
